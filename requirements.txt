@@ -1,0 +1,2 @@
+# Tested with Python 3.13 on Windows 11.
+paramiko==4.0.0

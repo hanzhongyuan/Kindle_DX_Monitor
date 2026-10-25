@@ -1,0 +1,24 @@
+# Local devices, credentials, session data, and personal backups
+/kindle-display.local.json
+/virtual-display-install.json
+/setup-state.json
+/scripts/display-baseline.json
+/runtime/
+/backups/
+/artifacts/
+/packages/
+/staging/
+/publish/
+/.venv/
+__pycache__/
+*.py[cod]
+*.log
+*.pem
+*.key
+*.ppk
+*.lnk
+.env
+.env.*
+*.pdb
+*.tmp
+/KindleDisplay.*.exe

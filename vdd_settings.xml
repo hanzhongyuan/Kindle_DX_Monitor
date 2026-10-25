@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vdd_settings>
+  <monitors><count>1</count></monitors>
+  <gpu><friendlyname>default</friendlyname></gpu>
+  <global></global>
+  <resolutions>
+    <resolution><width>824</width><height>1200</height><refresh_rate>60</refresh_rate></resolution>
+    <resolution><width>1200</width><height>824</height><refresh_rate>60</refresh_rate></resolution>
+  </resolutions>
+  <options>
+    <CustomEdid>false</CustomEdid>
+    <PreventSpoof>false</PreventSpoof>
+    <EdidCeaOverride>false</EdidCeaOverride>
+    <HardwareCursor>false</HardwareCursor>
+    <SDR10bit>false</SDR10bit>
+    <HDRPlus>false</HDRPlus>
+    <logging>false</logging>
+    <debuglogging>false</debuglogging>
+  </options>
+</vdd_settings>
