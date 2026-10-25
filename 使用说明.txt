@@ -1,4 +1,19 @@
-Kindle DX Monitor — 两个独立程序
+Kindle DX Monitor — 按机型选择程序
+
+Paperwhite 2 专用：KindlePaperwhite2MessageBoard.exe
+只做十行休眠封面，不做扩展显示器；适用固件 5.12.2.2。
+首次先读 docs/PAPERWHITE2_MESSAGEBOARD.zh-CN.md，完成设备越狱及 linkss 屏保插件配置。
+连接后保持 Kindle 存储盘模式，不需要 USBNetwork、SSH 或网卡设置。
+编辑或粘贴最多十行 → 预览 → 发送到 Kindle → 等待写入完成 → 安全弹出并拔线。
+首次启用自动重载后，需要按提示在 Kindle 上完整重启一次。
+以后拔线约十秒后会重新载入界面，再短按电源显示封面。
+若没有刷新，使用 KUAL → Screen Savers → Restart framework now。
+“恢复之前的封面”还原程序接管前的屏保图片，不卸载插件。
+PW2 草稿保存在 runtime/paperwhite2/messageboard-draft.txt，与 DX 分开。
+保留整个 runtime/paperwhite2，以及 Kindle 的 linkss/pw2-messageboard-backup。
+此版本未做 PW2 实机验证。电脑提示写入完成后，还需在 Kindle 上确认显示结果。
+
+以下为原有 DX Graphite 程序：
 
 请在完整解压的项目文件夹中使用，不能只复制一个 EXE。
 首次使用先看 docs/BEGINNER_GUIDE.zh-CN.md；扩展屏另看 docs/EXTENDED_DISPLAY.zh-CN.md。

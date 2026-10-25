@@ -154,10 +154,47 @@ namespace KindleDisplay
         [STAThread]
         private static int Main(string[] args)
         {
+            return MessageBoardLauncher.Run(args, MessageBoardProfile.Dx);
+        }
+    }
+
+    internal static class Paperwhite2MessageBoardProgram
+    {
+        [STAThread]
+        private static int Main(string[] args)
+        {
+            return MessageBoardLauncher.Run(args, MessageBoardProfile.Paperwhite2);
+        }
+    }
+
+    internal sealed class MessageBoardProfile
+    {
+        internal static readonly MessageBoardProfile Dx = new MessageBoardProfile(false);
+        internal static readonly MessageBoardProfile Paperwhite2 = new MessageBoardProfile(true);
+        internal readonly bool UsbStorage;
+        internal readonly string Title, MutexName, RuntimeSubdirectory, BackendScript;
+        internal readonly int Width, Height;
+
+        private MessageBoardProfile(bool paperwhite2)
+        {
+            UsbStorage = paperwhite2;
+            Title = paperwhite2 ? "Kindle Paperwhite 2 封面留言板" : "Kindle 休眠留言板";
+            MutexName = paperwhite2 ? "KindleView-Paperwhite2-MessageBoard-Gui-" : "KindleView-MessageBoard-Gui-";
+            RuntimeSubdirectory = paperwhite2 ? "paperwhite2" : "";
+            BackendScript = paperwhite2 ? "kindle-pw2-messageboard.py" : "kindle-messageboard.py";
+            Width = paperwhite2 ? 758 : 824;
+            Height = paperwhite2 ? 1024 : 1200;
+        }
+    }
+
+    internal static class MessageBoardLauncher
+    {
+        internal static int Run(string[] args, MessageBoardProfile profile)
+        {
             // This independent executable never dispatches display workers.
             if (args.Length != 0) return 64;
             string sid = WindowsIdentity.GetCurrent().User.Value;
-            using (Mutex mutex = new Mutex(false, "Local\\KindleView-MessageBoard-Gui-" + sid))
+            using (Mutex mutex = new Mutex(false, "Local\\" + profile.MutexName + sid))
             {
                 bool owned = false;
                 try
@@ -166,7 +203,7 @@ namespace KindleDisplay
                     catch (AbandonedMutexException) { owned = true; }
                     if (!owned)
                     {
-                        MessageBox.Show("Kindle 留言板已经打开，请从任务栏切换到该窗口。", "Kindle 留言板",
+                        MessageBox.Show(profile.Title + "已经打开，请从任务栏切换到该窗口。", profile.Title,
                             MessageBoxButtons.OK, MessageBoxIcon.Information);
                         return 0;
                     }
@@ -174,11 +211,11 @@ namespace KindleDisplay
                     string python = RuntimePaths.ReadPythonPath(root);
                     Application.EnableVisualStyles();
                     Application.SetCompatibleTextRenderingDefault(false);
-                    Application.Run(new MessageBoardForm(root, python));
+                    Application.Run(new MessageBoardForm(root, python, profile));
                 }
                 catch (Exception error)
                 {
-                    MessageBox.Show("留言板未能正常打开：" + error.Message, "Kindle 留言板",
+                    MessageBox.Show("留言板未能正常打开：" + error.Message, profile.Title,
                         MessageBoxButtons.OK, MessageBoxIcon.Error);
                     return 1;
                 }
@@ -829,14 +866,24 @@ namespace KindleDisplay
     {
         internal static Bitmap Render(string[] lines)
         {
+            return Render(lines, 824, 1200);
+        }
+
+        internal static Bitmap Render(string[] lines, int width, int height)
+        {
             if (lines == null || lines.Length != 10) throw new ArgumentException("留言板需要十行文本。");
-            Bitmap bitmap = new Bitmap(824, 1200, System.Drawing.Imaging.PixelFormat.Format24bppRgb);
+            if (!((width == 824 && height == 1200) || (width == 758 && height == 1024)))
+                throw new ArgumentException("不支持的留言板尺寸。");
+            float horizontalScale = width / 824F, verticalScale = height / 1200F;
+            float fontScale = Math.Min(horizontalScale, verticalScale);
+            float left = 52 * horizontalScale, right = width - left, textLeft = 108 * horizontalScale;
+            Bitmap bitmap = new Bitmap(width, height, System.Drawing.Imaging.PixelFormat.Format24bppRgb);
             try
             {
                 using (Graphics graphics = Graphics.FromImage(bitmap))
-                using (Font title = new Font("Microsoft YaHei", 48F, FontStyle.Bold, GraphicsUnit.Pixel))
-                using (Font number = new Font("Microsoft YaHei", 24F, FontStyle.Regular, GraphicsUnit.Pixel))
-                using (Font footer = new Font("Microsoft YaHei", 21F, FontStyle.Regular, GraphicsUnit.Pixel))
+                using (Font title = new Font("Microsoft YaHei", 48F * fontScale, FontStyle.Bold, GraphicsUnit.Pixel))
+                using (Font number = new Font("Microsoft YaHei", 24F * fontScale, FontStyle.Regular, GraphicsUnit.Pixel))
+                using (Font footer = new Font("Microsoft YaHei", 21F * fontScale, FontStyle.Regular, GraphicsUnit.Pixel))
                 using (Pen rule = new Pen(Color.FromArgb(190, 190, 190), 1F))
                 using (StringFormat format = new StringFormat(StringFormat.GenericTypographic))
                 {
@@ -844,34 +891,36 @@ namespace KindleDisplay
                     graphics.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
                     format.FormatFlags |= StringFormatFlags.NoWrap | StringFormatFlags.MeasureTrailingSpaces;
                     format.Trimming = StringTrimming.None;
-                    graphics.DrawString("留言板", title, Brushes.Black, new PointF(52, 48));
-                    graphics.DrawLine(Pens.Black, 52, 126, 772, 126);
+                    graphics.DrawString("留言板", title, Brushes.Black, new PointF(left, 48 * verticalScale));
+                    graphics.DrawLine(Pens.Black, left, 126 * verticalScale, right, 126 * verticalScale);
                     for (int index = 0; index < 10; index++)
                     {
                         string text = lines[index] ?? "";
                         if (text.IndexOfAny(new char[] { '\r', '\n', '\t' }) >= 0)
                             throw new ArgumentException("第 " + (index + 1) + " 行包含换行或制表符，请按一行一条填写。");
-                        float top = 158 + index * 91;
+                        float top = (158 + index * 91) * verticalScale;
                         graphics.DrawString((index + 1).ToString("00", CultureInfo.InvariantCulture), number,
-                            Brushes.DimGray, new PointF(52, top + 14));
-                        using (Font lineFont = FitFont(graphics, text, format, index + 1))
-                            graphics.DrawString(text, lineFont, Brushes.Black, new PointF(108, top + (60 - lineFont.GetHeight(graphics)) / 2), format);
-                        graphics.DrawLine(rule, 108, top + 69, 772, top + 69);
+                            Brushes.DimGray, new PointF(left, top + 14 * verticalScale));
+                        using (Font lineFont = FitFont(graphics, text, format, index + 1, right - textLeft, fontScale))
+                            graphics.DrawString(text, lineFont, Brushes.Black, new PointF(textLeft,
+                                top + (60 * verticalScale - lineFont.GetHeight(graphics)) / 2), format);
+                        graphics.DrawLine(rule, textLeft, top + 69 * verticalScale, right, top + 69 * verticalScale);
                     }
                     graphics.DrawString("更新于 " + DateTime.Now.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture), footer,
-                        Brushes.DimGray, new PointF(52, 1135));
+                        Brushes.DimGray, new PointF(left, 1135 * verticalScale));
                 }
                 return bitmap;
             }
             catch { bitmap.Dispose(); throw; }
         }
 
-        private static Font FitFont(Graphics graphics, string text, StringFormat format, int lineNumber)
+        private static Font FitFont(Graphics graphics, string text, StringFormat format, int lineNumber,
+            float availableWidth, float fontScale)
         {
             for (float size = 42; size >= 26; size -= 1)
             {
-                Font font = new Font("Microsoft YaHei", size, FontStyle.Regular, GraphicsUnit.Pixel);
-                if (graphics.MeasureString(text, font, Int32.MaxValue, format).Width <= 664) return font;
+                Font font = new Font("Microsoft YaHei", size * fontScale, FontStyle.Regular, GraphicsUnit.Pixel);
+                if (graphics.MeasureString(text, font, Int32.MaxValue, format).Width <= availableWidth) return font;
                 font.Dispose();
             }
             throw new ArgumentException("第 " + lineNumber + " 行太长，缩小字体后仍放不下。请拆到下一行或缩短文字。");
@@ -881,6 +930,7 @@ namespace KindleDisplay
     internal sealed class MessageBoardForm : Form
     {
         private readonly string root, python, runtime;
+        private readonly MessageBoardProfile profile;
         private readonly TextBox editor = new TextBox();
         private readonly Label lineCount = new Label();
         private readonly PictureBox preview = new PictureBox();
@@ -893,11 +943,17 @@ namespace KindleDisplay
         private static extern bool MoveFileEx(string existingPath, string newPath, uint flags);
 
         internal MessageBoardForm(string projectRoot, string pythonPath)
+            : this(projectRoot, pythonPath, MessageBoardProfile.Dx)
+        {
+        }
+
+        internal MessageBoardForm(string projectRoot, string pythonPath, MessageBoardProfile selectedProfile)
         {
             root = projectRoot;
             python = pythonPath;
-            runtime = Path.Combine(root, "runtime");
-            Text = "Kindle 休眠留言板";
+            profile = selectedProfile;
+            runtime = Path.Combine(root, "runtime", profile.RuntimeSubdirectory);
+            Text = profile.Title;
             ClientSize = new Size(930, 665);
             Font = new Font("Microsoft YaHei UI", 10F);
             AutoScaleMode = AutoScaleMode.Font;
@@ -909,7 +965,9 @@ namespace KindleDisplay
             ShowInTaskbar = true;
             Controls.Add(new Label { Text = "把提醒留在墨水屏上", Location = new Point(24, 18), Size = new Size(540, 32),
                 Font = new Font("Microsoft YaHei UI", 15F, FontStyle.Bold) });
-            Controls.Add(new Label { Text = "最多十行，支持整段粘贴并自动保存；扩展屏运行时需先手动断开。\r\n休眠后可拔线；Kindle 重启后需重新发送。",
+            Controls.Add(new Label { Text = profile.UsbStorage
+                ? "仅限 Paperwhite 2；首次需按指南配置设备。最多十行，编辑自动保存。\r\n连接 Kindle 存储盘发送；发送后请安全弹出，按下方提示重载封面。"
+                : "最多十行，支持整段粘贴并自动保存；扩展屏运行时需先手动断开。\r\n休眠后可拔线；Kindle 重启后需重新发送。",
                 Location = new Point(26, 58), Size = new Size(555, 48), ForeColor = Color.DimGray,
                 Font = new Font("Microsoft YaHei UI", 9F) });
             editor.Location = new Point(26, 118);
@@ -945,15 +1003,16 @@ namespace KindleDisplay
             lineCount.Font = new Font("Microsoft YaHei UI", 9F);
             Controls.Add(lineCount);
             preview.Location = new Point(594, 64);
-            preview.Size = new Size(310, 452);
+            preview.Size = new Size(310, profile.UsbStorage ? 419 : 452);
             preview.SizeMode = PictureBoxSizeMode.Zoom;
             preview.BorderStyle = BorderStyle.FixedSingle;
             preview.BackColor = Color.FromArgb(245, 245, 245);
             Controls.Add(preview);
-            Controls.Add(new Label { Text = "竖向封面 · 824 × 1200", Location = new Point(594, 526), Size = new Size(310, 24),
+            Controls.Add(new Label { Text = "竖向封面 · " + profile.Width + " × " + profile.Height,
+                Location = new Point(594, preview.Bottom + 10), Size = new Size(310, 24),
                 ForeColor = Color.DimGray, TextAlign = ContentAlignment.MiddleCenter });
             Button[] buttons = { render, send, restore, close };
-            string[] captions = { "预览", "发送到 Kindle", "恢复原休眠封面", "关闭" };
+            string[] captions = { "预览", "发送到 Kindle", profile.UsbStorage ? "恢复之前的封面" : "恢复原休眠封面", "关闭" };
             int[] widths = { 98, 152, 170, 92 };
             int x = 26;
             int buttonsTop = Math.Max(505, lineCount.Bottom + 12);
@@ -970,7 +1029,9 @@ namespace KindleDisplay
             notice.Size = new Size(878, 77);
             ClientSize = new Size(930, Math.Max(665, notice.Bottom + 23));
             notice.ForeColor = Color.DimGray;
-            notice.Text = "先编辑并预览，再连接 USB 数据线发送。草稿只保存在本机。";
+            notice.Text = profile.UsbStorage
+                ? "先编辑并预览，再连接 Kindle 存储盘发送。Paperwhite 2 草稿单独保存在本机。"
+                : "先编辑并预览，再连接 USB 数据线发送。草稿只保存在本机。";
             Controls.Add(notice);
             render.Click += delegate { TryPreview(); };
             send.Click += async delegate { await SendAsync(false); };
@@ -1077,7 +1138,7 @@ namespace KindleDisplay
             bool any = false;
             foreach (string line in text) if (!String.IsNullOrWhiteSpace(line)) { any = true; break; }
             if (requireText && !any) throw new ArgumentException("请至少填写一行留言后再发送。");
-            Bitmap rendered = MessageBoardRenderer.Render(text);
+            Bitmap rendered = MessageBoardRenderer.Render(text, profile.Width, profile.Height);
             try
             {
                 Directory.CreateDirectory(runtime);
@@ -1094,7 +1155,13 @@ namespace KindleDisplay
 
         private void TryPreview()
         {
-            try { SaveDraft(); CreatePreview(false); SetNotice("预览已更新。确认文字后，连接 USB 并点击“发送到 Kindle”。", false); }
+            try
+            {
+                SaveDraft(); CreatePreview(false);
+                SetNotice(profile.UsbStorage
+                    ? "预览已更新。请连接 Kindle，确认电脑能看到 Kindle 存储盘，再点击“发送到 Kindle”。"
+                    : "预览已更新。确认文字后，连接 USB 并点击“发送到 Kindle”。", false);
+            }
             catch (Exception error) { SetNotice(error.Message, true); }
         }
 
@@ -1106,11 +1173,13 @@ namespace KindleDisplay
             {
                 SaveDraft();
                 if (!restoring) imagePath = CreatePreview(true);
-                string script = Path.Combine(root, "scripts", "kindle-messageboard.py");
+                string script = Path.Combine(root, "scripts", profile.BackendScript);
                 if (!File.Exists(python)) throw new FileNotFoundException("未找到 Python，请检查本机配置。", python);
                 if (!File.Exists(script)) throw new FileNotFoundException("未找到留言板后台程序，请保留完整程序目录。", script);
                 SetBusy(true);
-                SetNotice(restoring ? "正在恢复原休眠封面，请保持 USB 连接…" : "正在发送留言，请保持 USB 连接…", false);
+                SetNotice(restoring
+                    ? (profile.UsbStorage ? "正在恢复之前的封面，请保持 USB 连接…" : "正在恢复原休眠封面，请保持 USB 连接…")
+                    : "正在发送留言，请保持 USB 连接…", false);
                 MessageBoardResult result = await Task.Run(() => RunBackend(restoring, imagePath));
                 if (result.ExitCode != 0)
                 {
@@ -1118,7 +1187,12 @@ namespace KindleDisplay
                     throw new InvalidOperationException(String.IsNullOrWhiteSpace(error) ? "留言板操作未完成，请检查 USB 连接后重试。" : error.Trim());
                 }
                 string output = result.Output == null ? "" : result.Output.Trim();
-                SetNotice(output.Length > 0 ? output : restoring ? "原休眠封面已恢复。" : "留言已发送，Kindle 已进入休眠显示留言。可拔线保留；Kindle 完整重启后需重新发送。", false);
+                string fallback = profile.UsbStorage
+                    ? (restoring ? "之前的封面已写回。请安全弹出 Kindle，并按指南重载封面。"
+                        : "留言已写入 Kindle。请安全弹出 Kindle，并按指南重载封面。")
+                    : (restoring ? "原休眠封面已恢复。"
+                        : "留言已发送，Kindle 已进入休眠显示留言。可拔线保留；Kindle 完整重启后需重新发送。");
+                SetNotice(output.Length > 0 ? output : fallback, false);
             }
             catch (Exception error) { SetNotice(error.Message, true); }
             finally { SetBusy(false); }
@@ -1128,7 +1202,7 @@ namespace KindleDisplay
         {
             using (DeviceOperationGuard guard = new DeviceOperationGuard())
             {
-                AssertDisplayStopped();
+                if (!profile.UsbStorage) AssertDisplayStopped();
                 return RunBackendCore(restoring, imagePath);
             }
         }
@@ -1163,7 +1237,7 @@ namespace KindleDisplay
 
         private MessageBoardResult RunBackendCore(bool restoring, string imagePath)
         {
-            string script = Path.Combine(root, "scripts", "kindle-messageboard.py");
+            string script = Path.Combine(root, "scripts", profile.BackendScript);
             string arguments = "\"" + script + "\" --action " + (restoring ? "restore" : "install --image \"" + imagePath + "\"");
             ProcessStartInfo info = new ProcessStartInfo(python, arguments);
             info.WorkingDirectory = root;
@@ -1201,7 +1275,8 @@ namespace KindleDisplay
 
         private void SetNotice(string text, bool failure)
         {
-            notice.Text = text.Length > 480 ? text.Substring(0, 480) + "…（详情见 runtime 中的留言板日志）" : text;
+            notice.Text = text.Length > 480 ? text.Substring(0, 480) +
+                (profile.UsbStorage ? "…（详情见 runtime/paperwhite2 中的留言板日志）" : "…（详情见 runtime 中的留言板日志）") : text;
             notice.ForeColor = failure ? Color.Firebrick : Color.FromArgb(35, 70, 110);
         }
     }

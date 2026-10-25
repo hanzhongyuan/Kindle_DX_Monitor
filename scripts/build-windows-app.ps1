@@ -10,7 +10,8 @@ foreach ($requiredPath in @($compilerPath, $sourcePath, $manifestPath)) {
 }
 $applications = @(
     @{ FileName = 'KindleDisplay.exe'; EntryPoint = 'KindleDisplay.Program' },
-    @{ FileName = 'KindleMessageBoard.exe'; EntryPoint = 'KindleDisplay.MessageBoardProgram' }
+    @{ FileName = 'KindleMessageBoard.exe'; EntryPoint = 'KindleDisplay.MessageBoardProgram' },
+    @{ FileName = 'KindlePaperwhite2MessageBoard.exe'; EntryPoint = 'KindleDisplay.Paperwhite2MessageBoardProgram' }
 )
 foreach ($application in $applications) {
     $outputPath = Join-Path $projectRoot $application.FileName
