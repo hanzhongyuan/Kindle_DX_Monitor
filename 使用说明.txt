@@ -1,48 +1,66 @@
-Kindle DX Monitor
+Kindle DX Monitor — 两个独立程序
 
-休眠留言板
-点击主界面“休眠留言板 · 最多十行”，在一个多行文本框里编辑文字。
-每行对应一条留言，可用 Ctrl+A 全选、Ctrl+C 复制、Ctrl+V 粘贴整段内容。
-最多发送十行；超过十行会提示调整，已输入的内容会保留，不会截掉。
-可先预览，再点击“发送到 Kindle”。
-编辑内容自动保存到本机 UTF-8 文本文件 runtime/messageboard-draft.txt，未发送的修改也会保存。
-下次打开会自动加载上次内容，可直接编辑；旧版 messageboard-draft.json 记录会兼容迁移。
-本地留言和运行记录不会上传到 GitHub。
-发送时会先断开扩展显示，再设置休眠封面；请等程序提示成功。
-成功后可拔掉 USB，留言无需电脑持续刷新。
-下次修改时唤醒 Kindle、接回 USB 网络，再发送新文字。
-“恢复原休眠封面”可以撤销留言板。
+请在完整解压的项目文件夹中使用，不能只复制一个 EXE。
+首次使用先看 docs/BEGINNER_GUIDE.zh-CN.md；扩展屏另看 docs/EXTENDED_DISPLAY.zh-CN.md。
+README.md 有入口链接，也可以在 GitHub 上阅读带格式的指南：
+https://github.com/hanzhongyuan/Kindle_DX_Monitor
+
+一、Kindle 留言板：KindleMessageBoard.exe
+双击直接进入留言编辑窗口，不需要先打开显示器程序。
+1. 唤醒 Kindle，接上 USB 数据线，保持 USB 网络模式。
+2. 在一个多行文本框里编辑或粘贴文字，每行一条，最多十行。
+3. 点击“预览”，再点“发送到 Kindle”，等待完成提示。
+4. 成功后可以关闭程序、拔线，文字保留在 Kindle 的休眠封面。
+
+支持 Ctrl+A 全选、Ctrl+C 复制、Ctrl+V 粘贴整段内容，Enter 换行。
+超过十行会提示调整，输入内容不会截掉。
+编辑自动保存在本机 runtime/messageboard-draft.txt，未发送的修改也会保存。
+下次打开继续编辑；旧版 JSON 草稿兼容读取。
+“恢复原休眠封面”可以撤销留言板；关闭窗口只保存草稿并退出。
 Kindle 完整重启会恢复原封面，需要重新发送；普通休眠和拔线可保留。
+只用留言板无需安装虚拟显示驱动、TightVNC、PowerShell 7 或 Kindle VNC 客户端。
+首次仍需按新手指南准备 USBNetwork、Python 和可信主机公钥。
 
-首次安装请阅读 README.md，准备 USBNetwork、Kindle 客户端、Windows 依赖和本机配置。
-下载时保留完整目录；KindleDisplay.exe 需要配套 scripts 和运行依赖。
-
-日常使用
-1. Kindle 开启 USB 网络模式并连接数据线。
+二、Kindle 显示器：KindleDisplay.exe
+1. Kindle 保持 USB 网络模式，接上数据线。
 2. 双击 KindleDisplay.exe，选择方向，点击“连接”。
-3. 将需要显示的窗口拖到扩展屏上。
+3. Windows 保持“扩展这些显示器”，将窗口拖到 Kindle 对应的屏幕。
 
-按钮
 连接：启用专用扩展屏，开始显示。
 断开连接：停止显示，恢复 Kindle 阅读界面，保留电脑控制窗口。
 刷新：重新加载当前画面。
-应用方向：使用下拉框所选的 0°、90°、180° 或 270°，成功后记住选择。
+应用方向：应用下拉框所选的 0°、90°、180° 或 270°，成功后记住选择。
 退出：断开连接并关闭窗口；右上角关闭按钮作用相同。
 最小化：继续显示，程序留在任务栏。
 
 切换方向可能需要十几秒，并会闪屏、短暂回到 Home。
 横屏朝向相反时，选择另一个横屏方向。
-Windows 显示设置保持“扩展”，不要改成“复制”。
-若出现合并的 2|3 屏幕，改成“扩展 2 和 3 上的桌面”并保留更改，再连接。
+若 Windows 出现合并的 2|3 屏幕，改成“扩展 2 和 3 上的桌面”并保留更改。
 屏幕编号以本机实际显示为准。
+USB 暂时断开会自动重试；电脑睡眠或关机时无法继续更新画面。
+停止显示请在电脑中断开；只按 Kindle Home 会触发客户端重连。
+墨水屏适合静态文字和文档，Windows 的 60 Hz 不代表墨水屏有 60 fps。
 
+三、在两种用途之间切换
+显示器切到留言板：先在 KindleDisplay.exe 点击“断开连接”，再到 KindleMessageBoard.exe 发送留言。
+留言板不会自动停止显示器，两边不要同时向 Kindle 发送画面。
+留言板切到显示器：唤醒 Kindle，接回 USB 网络，在 KindleDisplay.exe 点击“连接”。
+两个程序都可以最小化到任务栏，分别打开、分别退出。
+另一个程序正在操作设备时会提示等待；显示器连接中或重连中，也需先断开再发送留言。
+
+四、重启后恢复 USB 网络
 Kindle 重启后若变为存储盘：安全弹出并拔线，按 Home，直接用实体键盘唤出搜索栏。
 逐条输入并提交：
 ;debugOn
 `usbNetwork
 ;debugOff
 然后重新插线。第二条以反引号开头；命令区分大小写。
+这是一条切换命令，已经处于 USB 网络模式时不要反复执行。
 
-USB 暂时断开会自动重试。电脑睡眠或关机时无法显示，重启后重新打开程序。
-退出前用电脑界面断开；只按 Kindle Home 会触发客户端重新连接。
-墨水屏适合文字、代码和文档，显示模式的 60Hz 不代表墨水屏有 60fps。
+五、保存与更新
+私人留言和本机运行记录不随仓库发布。
+升级前关闭两个程序并备份旧项目文件夹，将新版内容覆盖到旧目录。
+保留整个 runtime、.venv 和本机配置；不要删除旧目录后重新下载。
+特别保留 messageboard-draft.txt、messageboard-state.json 和 kindle_known_hosts。
+扩展屏用户还需保留 virtual-display-install.json 与 scripts/display-baseline.json。
+新电脑需要重新创建 Python 环境，具体见新手指南。

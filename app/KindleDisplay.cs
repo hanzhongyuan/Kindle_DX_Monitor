@@ -63,6 +63,28 @@ namespace KindleDisplay
 
         internal RuntimePaths(string root)
         {
+            Dictionary<string, object> config = ReadConfiguration(root);
+            PowerShellPath = ConfiguredPath(config, "PowerShellPath", FindPowerShell(), root);
+            PythonPath = ConfiguredPath(config, "PythonPath", Path.Combine(root, @".venv\Scripts\python.exe"), root);
+            PythonHostPath = ConfiguredPath(config, "PythonHostPath", FindPythonHost(PythonPath), root);
+            VncServerPath = ConfiguredPath(config, "VncServerPath",
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), @"TightVNC\tvnserver.exe"), root);
+        }
+
+        // The standalone message board only needs Python. In particular it
+        // must not resolve or require any virtual-display/VNC/PowerShell setup.
+        internal static string ReadPythonPath(string root)
+        {
+            return ConfiguredPath(ReadConfiguration(root), "PythonPath", Path.Combine(root, @".venv\Scripts\python.exe"), root);
+        }
+
+        internal static string ReadPythonHostPath(string root, string python)
+        {
+            return ConfiguredPath(ReadConfiguration(root), "PythonHostPath", FindPythonHost(python), root);
+        }
+
+        private static Dictionary<string, object> ReadConfiguration(string root)
+        {
             Dictionary<string, object> config = new Dictionary<string, object>();
             string configPath = Path.Combine(root, "kindle-display.local.json");
             if (File.Exists(configPath))
@@ -71,11 +93,7 @@ namespace KindleDisplay
                     File.ReadAllText(configPath, Encoding.UTF8));
                 if (config == null) throw new InvalidDataException("kindle-display.local.json must contain a JSON object.");
             }
-            PowerShellPath = ConfiguredPath(config, "PowerShellPath", FindPowerShell(), root);
-            PythonPath = ConfiguredPath(config, "PythonPath", Path.Combine(root, @".venv\Scripts\python.exe"), root);
-            PythonHostPath = ConfiguredPath(config, "PythonHostPath", FindPythonHost(PythonPath), root);
-            VncServerPath = ConfiguredPath(config, "VncServerPath",
-                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), @"TightVNC\tvnserver.exe"), root);
+            return config;
         }
 
         private static string ConfiguredPath(Dictionary<string, object> config, string name, string fallback, string root)
@@ -128,6 +146,45 @@ namespace KindleDisplay
                 return Path.GetFullPath(Path.Combine(home, "python.exe"));
             }
             return python;
+        }
+    }
+
+    internal static class MessageBoardProgram
+    {
+        [STAThread]
+        private static int Main(string[] args)
+        {
+            // This independent executable never dispatches display workers.
+            if (args.Length != 0) return 64;
+            string sid = WindowsIdentity.GetCurrent().User.Value;
+            using (Mutex mutex = new Mutex(false, "Local\\KindleView-MessageBoard-Gui-" + sid))
+            {
+                bool owned = false;
+                try
+                {
+                    try { owned = mutex.WaitOne(0); }
+                    catch (AbandonedMutexException) { owned = true; }
+                    if (!owned)
+                    {
+                        MessageBox.Show("Kindle 留言板已经打开，请从任务栏切换到该窗口。", "Kindle 留言板",
+                            MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        return 0;
+                    }
+                    string root = Path.GetFullPath(AppDomain.CurrentDomain.BaseDirectory);
+                    string python = RuntimePaths.ReadPythonPath(root);
+                    Application.EnableVisualStyles();
+                    Application.SetCompatibleTextRenderingDefault(false);
+                    Application.Run(new MessageBoardForm(root, python));
+                }
+                catch (Exception error)
+                {
+                    MessageBox.Show("留言板未能正常打开：" + error.Message, "Kindle 留言板",
+                        MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return 1;
+                }
+                finally { if (owned) mutex.ReleaseMutex(); }
+            }
+            return 0;
         }
     }
 
@@ -217,6 +274,31 @@ namespace KindleDisplay
         public Snapshot State;
     }
 
+    internal sealed class DeviceOperationGuard : IDisposable
+    {
+        private readonly Mutex mutex;
+        private bool owned;
+
+        internal DeviceOperationGuard()
+        {
+            string sid = WindowsIdentity.GetCurrent().User.Value;
+            mutex = new Mutex(false, "Local\\KindleView-DeviceOperation-" + sid);
+            try
+            {
+                try { owned = mutex.WaitOne(0); }
+                catch (AbandonedMutexException) { owned = true; }
+                if (!owned) throw new InvalidOperationException("另一个 Kindle 程序正在操作设备，请等待它完成后再试。");
+            }
+            catch { mutex.Dispose(); throw; }
+        }
+
+        public void Dispose()
+        {
+            if (owned) { owned = false; mutex.ReleaseMutex(); }
+            mutex.Dispose();
+        }
+    }
+
     internal sealed class DisplayForm : Form
     {
         private readonly string root = Path.GetFullPath(AppDomain.CurrentDomain.BaseDirectory);
@@ -228,7 +310,7 @@ namespace KindleDisplay
         private readonly string vncServer;
         private readonly Label status = new Label(), detail = new Label();
         private readonly Button connect = new Button(), disconnect = new Button(), refresh = new Button(),
-            orientation = new Button(), exit = new Button(), messageBoard = new Button();
+            orientation = new Button(), exit = new Button();
         private readonly ComboBox rotationChoice = new ComboBox();
         private static readonly int[] RotationValues = { 0, 90, 180, 270 };
         private static readonly string[] RotationLabels = { "0° · 竖屏（正向）", "90° · 横屏一",
@@ -266,7 +348,7 @@ namespace KindleDisplay
             pythonHost = paths.PythonHostPath;
             vncServer = paths.VncServerPath;
             Text = "Kindle 显示器";
-            ClientSize = new Size(620, 370);
+            ClientSize = new Size(620, 320);
             Font = new Font("Microsoft YaHei UI", 10F);
             AutoScaleMode = AutoScaleMode.Font;
             FormBorderStyle = FormBorderStyle.FixedSingle;
@@ -311,30 +393,21 @@ namespace KindleDisplay
                 buttons[i].UseVisualStyleBackColor = true;
                 Controls.Add(buttons[i]);
             }
-            messageBoard.Text = "休眠留言板 · 最多十行";
-            messageBoard.Location = new Point(24, 254);
-            messageBoard.Size = new Size(572, 38);
-            messageBoard.UseVisualStyleBackColor = true;
-            Controls.Add(messageBoard);
-            Controls.Add(new Label { Text = "先选方向再连接；留言板可将文字保留在休眠封面。\r\n可最小化到任务栏；退出或关闭窗口会先断开显示连接。",
-                Location = new Point(26, 310), Size = new Size(570, 43), ForeColor = Color.DimGray,
+            Controls.Add(new Label { Text = "先选方向再连接；连接后点击“应用方向”调整。\r\n可最小化到任务栏；退出或关闭窗口会先断开显示连接。",
+                Location = new Point(26, 260), Size = new Size(570, 43), ForeColor = Color.DimGray,
                 Font = new Font("Microsoft YaHei UI", 9F) });
             connect.Click += async delegate
             {
                 if (snapshot.Running) { Notice("已接管当前连接", "Kindle 已在后台连接，无需重复启动。", false); return; }
                 if (snapshot.NeedsCleanup) { Notice("请先断开上次连接", "点击“断开连接”清理后，再点击“连接”。", true); return; }
-                try { WriteOrientationRequest(); }
+                try { using (DeviceOperationGuard guard = new DeviceOperationGuard()) WriteOrientationRequest(); }
+                catch (InvalidOperationException error) { Notice("连接暂未启动", error.Message, true); return; }
                 catch (Exception) { Notice("方向设置未保存", "请稍后重试；尚未启动连接。", true); return; }
                 await ExecuteActionAsync("Start");
             };
             disconnect.Click += async delegate { await ExecuteActionAsync("Stop"); };
             refresh.Click += delegate { SendRefreshRequest(); };
             orientation.Click += delegate { ApplyOrientation(); };
-            messageBoard.Click += delegate
-            {
-                using (MessageBoardForm board = new MessageBoardForm(root, python, PrepareMessageBoardAsync))
-                    board.ShowDialog(this);
-            };
             exit.Click += async delegate { await RequestExitAsync(); };
             FormClosing += async delegate(object sender, FormClosingEventArgs args)
             {
@@ -367,7 +440,7 @@ namespace KindleDisplay
             return Convert.ToString(Value(data, name), CultureInfo.InvariantCulture);
         }
 
-        private static long Number(Dictionary<string, object> data, string name)
+        internal static long Number(Dictionary<string, object> data, string name)
         {
             long value;
             return Int64.TryParse(TextValue(data, name), NumberStyles.Integer, CultureInfo.InvariantCulture, out value) ? value : 0;
@@ -388,7 +461,7 @@ namespace KindleDisplay
             return value == 0 || value == 90 || value == 180 || value == 270 ? (int?)value : null;
         }
 
-        private static Dictionary<string, object> ReadJson(string path)
+        internal static Dictionary<string, object> ReadJson(string path)
         {
             if (!File.Exists(path)) return null;
             using (FileStream stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
@@ -400,7 +473,7 @@ namespace KindleDisplay
         // elevating the GUI. The state PID, exact image and 100ns creation time
         // must all agree. Actual Stop still uses the session script's independent
         // executable + complete command-line + PID/start-time verification.
-        private ControllerIdentity ReadControllerIdentity(int pid)
+        internal static ControllerIdentity ReadControllerIdentity(int pid, string python, string pythonHost)
         {
             if (pid <= 0) return null;
             IntPtr handle = OpenProcess(0x1000, false, pid); // PROCESS_QUERY_LIMITED_INFORMATION only.
@@ -426,7 +499,7 @@ namespace KindleDisplay
             Dictionary<string, object> state = ReadJson(Runtime("kindle-display-controller.json"));
             Dictionary<string, object> vnc = ReadJson(Runtime("kindle-vnc-server.json"));
             Dictionary<string, object> settings = ReadJson(Runtime("kindle-display-settings.json"));
-            ControllerIdentity controller = ReadControllerIdentity((int)Number(state, "pid"));
+            ControllerIdentity controller = ReadControllerIdentity((int)Number(state, "pid"), python, pythonHost);
             bool pending = String.Equals(TextValue(vnc, "OwnerSid"), sid, StringComparison.Ordinal) &&
                 String.Equals(TextValue(vnc, "ServerExe"), vncServer, StringComparison.OrdinalIgnoreCase) &&
                 Object.Equals(Value(vnc, "ConfigActive"), true);
@@ -478,6 +551,14 @@ namespace KindleDisplay
         }
 
         private OperationResult RunSession(string action)
+        {
+            // Acquire and release on this synchronous worker thread, never
+            // across an await. The other GUI cannot send while Start/Stop runs.
+            using (DeviceOperationGuard guard = new DeviceOperationGuard())
+                return RunSessionCore(action);
+        }
+
+        private OperationResult RunSessionCore(string action)
         {
             if (action != "Start" && action != "Stop") throw new ArgumentException("Unsupported session action.");
             ProcessStartInfo info = new ProcessStartInfo(Application.ExecutablePath, "--session " + action);
@@ -535,6 +616,10 @@ namespace KindleDisplay
                     Notice("已取消操作", "未授予设备管理权限，当前连接保持不变。", false);
                 else { known = false; Notice("操作未能启动", "请稍后重试；窗口会保留。", true); }
             }
+            catch (InvalidOperationException error)
+            {
+                Notice("操作暂未执行", error.Message, true);
+            }
             catch (Exception)
             {
                 known = false;
@@ -554,17 +639,6 @@ namespace KindleDisplay
             }
             else await PollAsync();
             return success;
-        }
-
-        private async Task<bool> PrepareMessageBoardAsync()
-        {
-            if (busy || closingRequested || allowClose) throw new InvalidOperationException("请等待当前显示操作完成。");
-            Snapshot current = await Task.Run(() => ReadSnapshot());
-            AcceptSnapshot(current);
-            known = true;
-            if (current.NeedsCleanup && !await ExecuteActionAsync("Stop"))
-                throw new InvalidOperationException("扩展屏尚未断开，请先完成断开操作后再发送留言。");
-            return true;
         }
 
         private async Task RequestExitAsync()
@@ -637,9 +711,10 @@ namespace KindleDisplay
             if (!snapshot.Running || busy || closingRequested) return;
             try
             {
-                WriteOrientationRequest();
+                using (DeviceOperationGuard guard = new DeviceOperationGuard()) WriteOrientationRequest();
                 Notice("正在应用方向…", RotationLabel(requestedRotation) + "，请等待十几秒。", false);
             }
+            catch (InvalidOperationException error) { Notice("方向请求未发送", error.Message, true); }
             catch (Exception) { Notice("方向请求未发送", "请稍后再试。", true); }
         }
 
@@ -649,11 +724,13 @@ namespace KindleDisplay
             try
             {
                 DateTime requested = DateTime.UtcNow;
-                File.WriteAllText(Runtime("kindle-display.refresh"),
-                    requested.ToString("o", CultureInfo.InvariantCulture), new UTF8Encoding(false));
+                using (DeviceOperationGuard guard = new DeviceOperationGuard())
+                    File.WriteAllText(Runtime("kindle-display.refresh"),
+                        requested.ToString("o", CultureInfo.InvariantCulture), new UTF8Encoding(false));
                 refreshRequested = requested;
                 Notice("已请求刷新", "画面将重新载入，可能短暂切换页面。", false);
             }
+            catch (InvalidOperationException error) { Notice("请求未发送", error.Message, true); }
             catch (Exception) { Notice("请求未发送", "请稍后再试。", true); }
         }
 
@@ -738,7 +815,6 @@ namespace KindleDisplay
             refresh.Enabled = idle && known && snapshot.Running;
             orientation.Enabled = idle && known && snapshot.Running && orientationRequestId == null;
             rotationChoice.Enabled = idle;
-            messageBoard.Enabled = idle;
             exit.Enabled = !closingRequested;
         }
     }
@@ -805,7 +881,6 @@ namespace KindleDisplay
     internal sealed class MessageBoardForm : Form
     {
         private readonly string root, python, runtime;
-        private readonly Func<Task<bool>> prepare;
         private readonly TextBox editor = new TextBox();
         private readonly Label lineCount = new Label();
         private readonly PictureBox preview = new PictureBox();
@@ -817,25 +892,24 @@ namespace KindleDisplay
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, EntryPoint = "MoveFileExW", SetLastError = true)]
         private static extern bool MoveFileEx(string existingPath, string newPath, uint flags);
 
-        internal MessageBoardForm(string projectRoot, string pythonPath, Func<Task<bool>> prepareAction)
+        internal MessageBoardForm(string projectRoot, string pythonPath)
         {
             root = projectRoot;
             python = pythonPath;
             runtime = Path.Combine(root, "runtime");
-            prepare = prepareAction;
             Text = "Kindle 休眠留言板";
             ClientSize = new Size(930, 665);
             Font = new Font("Microsoft YaHei UI", 10F);
             AutoScaleMode = AutoScaleMode.Font;
-            FormBorderStyle = FormBorderStyle.FixedDialog;
-            StartPosition = FormStartPosition.CenterParent;
+            FormBorderStyle = FormBorderStyle.FixedSingle;
+            StartPosition = FormStartPosition.CenterScreen;
             BackColor = Color.White;
             MaximizeBox = false;
             MinimizeBox = true;
-            ShowInTaskbar = false;
+            ShowInTaskbar = true;
             Controls.Add(new Label { Text = "把提醒留在墨水屏上", Location = new Point(24, 18), Size = new Size(540, 32),
                 Font = new Font("Microsoft YaHei UI", 15F, FontStyle.Bold) });
-            Controls.Add(new Label { Text = "每行一条，最多十行；支持整段复制粘贴，编辑内容自动保存。\r\n发送会先断开扩展屏。休眠后可拔线；Kindle 重启后需重新发送。",
+            Controls.Add(new Label { Text = "最多十行，支持整段粘贴并自动保存；扩展屏运行时需先手动断开。\r\n休眠后可拔线；Kindle 重启后需重新发送。",
                 Location = new Point(26, 58), Size = new Size(555, 48), ForeColor = Color.DimGray,
                 Font = new Font("Microsoft YaHei UI", 9F) });
             editor.Location = new Point(26, 118);
@@ -1036,8 +1110,6 @@ namespace KindleDisplay
                 if (!File.Exists(python)) throw new FileNotFoundException("未找到 Python，请检查本机配置。", python);
                 if (!File.Exists(script)) throw new FileNotFoundException("未找到留言板后台程序，请保留完整程序目录。", script);
                 SetBusy(true);
-                SetNotice("正在准备 Kindle… 如当前正在显示电脑画面，会先断开扩展屏连接。", false);
-                if (!await prepare()) throw new InvalidOperationException("未能断开扩展屏，留言板操作尚未开始。");
                 SetNotice(restoring ? "正在恢复原休眠封面，请保持 USB 连接…" : "正在发送留言，请保持 USB 连接…", false);
                 MessageBoardResult result = await Task.Run(() => RunBackend(restoring, imagePath));
                 if (result.ExitCode != 0)
@@ -1053,6 +1125,43 @@ namespace KindleDisplay
         }
 
         private MessageBoardResult RunBackend(bool restoring, string imagePath)
+        {
+            using (DeviceOperationGuard guard = new DeviceOperationGuard())
+            {
+                AssertDisplayStopped();
+                return RunBackendCore(restoring, imagePath);
+            }
+        }
+
+        private void AssertDisplayStopped()
+        {
+            Dictionary<string, object> state = DisplayForm.ReadJson(Path.Combine(runtime, "kindle-display-controller.json"));
+            if (state == null) return;
+            long rawPid = DisplayForm.Number(state, "pid");
+            long started = DisplayForm.Number(state, "starttimeUtcTicks");
+            if (rawPid <= 0 || rawPid > Int32.MaxValue || started <= 0)
+                throw new InvalidOperationException("无法确认显示器是否已断开，请先在显示器窗口完成断开操作。");
+            int pid = (int)rawPid;
+            string pythonHost = RuntimePaths.ReadPythonHostPath(root, python);
+            ControllerIdentity identity = DisplayForm.ReadControllerIdentity(pid, python, pythonHost);
+            if (identity != null)
+            {
+                if (identity.StartedTicks == started)
+                    throw new InvalidOperationException("请先在显示器窗口点击断开连接，再发送或恢复留言板。");
+                return; // A reused PID is not the saved controller.
+            }
+            try
+            {
+                using (Process process = Process.GetProcessById(pid))
+                {
+                    if (process.HasExited || process.StartTime.ToUniversalTime().Ticks != started) return;
+                    throw new InvalidOperationException("无法核实仍在运行的显示器进程，请先在显示器窗口完成断开操作。");
+                }
+            }
+            catch (ArgumentException) { } // The saved process has exited.
+        }
+
+        private MessageBoardResult RunBackendCore(bool restoring, string imagePath)
         {
             string script = Path.Combine(root, "scripts", "kindle-messageboard.py");
             string arguments = "\"" + script + "\" --action " + (restoring ? "restore" : "install --image \"" + imagePath + "\"");
