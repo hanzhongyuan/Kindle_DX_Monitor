@@ -228,7 +228,7 @@ namespace KindleDisplay
         private readonly string vncServer;
         private readonly Label status = new Label(), detail = new Label();
         private readonly Button connect = new Button(), disconnect = new Button(), refresh = new Button(),
-            orientation = new Button(), exit = new Button();
+            orientation = new Button(), exit = new Button(), messageBoard = new Button();
         private readonly ComboBox rotationChoice = new ComboBox();
         private static readonly int[] RotationValues = { 0, 90, 180, 270 };
         private static readonly string[] RotationLabels = { "0° · 竖屏（正向）", "90° · 横屏一",
@@ -266,7 +266,7 @@ namespace KindleDisplay
             pythonHost = paths.PythonHostPath;
             vncServer = paths.VncServerPath;
             Text = "Kindle 显示器";
-            ClientSize = new Size(620, 320);
+            ClientSize = new Size(620, 370);
             Font = new Font("Microsoft YaHei UI", 10F);
             AutoScaleMode = AutoScaleMode.Font;
             FormBorderStyle = FormBorderStyle.FixedSingle;
@@ -311,8 +311,13 @@ namespace KindleDisplay
                 buttons[i].UseVisualStyleBackColor = true;
                 Controls.Add(buttons[i]);
             }
-            Controls.Add(new Label { Text = "先选方向再连接；连接后点击“应用方向”调整。\r\n可最小化到任务栏；退出或关闭窗口会先断开连接。",
-                Location = new Point(26, 260), Size = new Size(570, 43), ForeColor = Color.DimGray,
+            messageBoard.Text = "休眠留言板 · 最多十行";
+            messageBoard.Location = new Point(24, 254);
+            messageBoard.Size = new Size(572, 38);
+            messageBoard.UseVisualStyleBackColor = true;
+            Controls.Add(messageBoard);
+            Controls.Add(new Label { Text = "先选方向再连接；留言板可将文字保留在休眠封面。\r\n可最小化到任务栏；退出或关闭窗口会先断开显示连接。",
+                Location = new Point(26, 310), Size = new Size(570, 43), ForeColor = Color.DimGray,
                 Font = new Font("Microsoft YaHei UI", 9F) });
             connect.Click += async delegate
             {
@@ -325,6 +330,11 @@ namespace KindleDisplay
             disconnect.Click += async delegate { await ExecuteActionAsync("Stop"); };
             refresh.Click += delegate { SendRefreshRequest(); };
             orientation.Click += delegate { ApplyOrientation(); };
+            messageBoard.Click += delegate
+            {
+                using (MessageBoardForm board = new MessageBoardForm(root, python, PrepareMessageBoardAsync))
+                    board.ShowDialog(this);
+            };
             exit.Click += async delegate { await RequestExitAsync(); };
             FormClosing += async delegate(object sender, FormClosingEventArgs args)
             {
@@ -492,9 +502,9 @@ namespace KindleDisplay
             return new OperationResult { ExitCode = code, State = ReadSnapshot() };
         }
 
-        private async Task ExecuteActionAsync(string action)
+        private async Task<bool> ExecuteActionAsync(string action)
         {
-            if (busy || allowClose) return;
+            if (busy || allowClose) return false;
             busy = true;
             stateGeneration++;
             UpdateButtons();
@@ -543,6 +553,18 @@ namespace KindleDisplay
                 else { closingRequested = false; UpdateButtons(); }
             }
             else await PollAsync();
+            return success;
+        }
+
+        private async Task<bool> PrepareMessageBoardAsync()
+        {
+            if (busy || closingRequested || allowClose) throw new InvalidOperationException("请等待当前显示操作完成。");
+            Snapshot current = await Task.Run(() => ReadSnapshot());
+            AcceptSnapshot(current);
+            known = true;
+            if (current.NeedsCleanup && !await ExecuteActionAsync("Stop"))
+                throw new InvalidOperationException("扩展屏尚未断开，请先完成断开操作后再发送留言。");
+            return true;
         }
 
         private async Task RequestExitAsync()
@@ -716,7 +738,362 @@ namespace KindleDisplay
             refresh.Enabled = idle && known && snapshot.Running;
             orientation.Enabled = idle && known && snapshot.Running && orientationRequestId == null;
             rotationChoice.Enabled = idle;
+            messageBoard.Enabled = idle;
             exit.Enabled = !closingRequested;
+        }
+    }
+
+    internal sealed class MessageBoardResult
+    {
+        internal int ExitCode;
+        internal string Output, Error;
+    }
+
+    internal static class MessageBoardRenderer
+    {
+        internal static Bitmap Render(string[] lines)
+        {
+            if (lines == null || lines.Length != 10) throw new ArgumentException("留言板需要十行文本。");
+            Bitmap bitmap = new Bitmap(824, 1200, System.Drawing.Imaging.PixelFormat.Format24bppRgb);
+            try
+            {
+                using (Graphics graphics = Graphics.FromImage(bitmap))
+                using (Font title = new Font("Microsoft YaHei", 48F, FontStyle.Bold, GraphicsUnit.Pixel))
+                using (Font number = new Font("Microsoft YaHei", 24F, FontStyle.Regular, GraphicsUnit.Pixel))
+                using (Font footer = new Font("Microsoft YaHei", 21F, FontStyle.Regular, GraphicsUnit.Pixel))
+                using (Pen rule = new Pen(Color.FromArgb(190, 190, 190), 1F))
+                using (StringFormat format = new StringFormat(StringFormat.GenericTypographic))
+                {
+                    graphics.Clear(Color.White);
+                    graphics.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+                    format.FormatFlags |= StringFormatFlags.NoWrap | StringFormatFlags.MeasureTrailingSpaces;
+                    format.Trimming = StringTrimming.None;
+                    graphics.DrawString("留言板", title, Brushes.Black, new PointF(52, 48));
+                    graphics.DrawLine(Pens.Black, 52, 126, 772, 126);
+                    for (int index = 0; index < 10; index++)
+                    {
+                        string text = lines[index] ?? "";
+                        if (text.IndexOfAny(new char[] { '\r', '\n', '\t' }) >= 0)
+                            throw new ArgumentException("第 " + (index + 1) + " 行包含换行或制表符，请按一行一条填写。");
+                        float top = 158 + index * 91;
+                        graphics.DrawString((index + 1).ToString("00", CultureInfo.InvariantCulture), number,
+                            Brushes.DimGray, new PointF(52, top + 14));
+                        using (Font lineFont = FitFont(graphics, text, format, index + 1))
+                            graphics.DrawString(text, lineFont, Brushes.Black, new PointF(108, top + (60 - lineFont.GetHeight(graphics)) / 2), format);
+                        graphics.DrawLine(rule, 108, top + 69, 772, top + 69);
+                    }
+                    graphics.DrawString("更新于 " + DateTime.Now.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture), footer,
+                        Brushes.DimGray, new PointF(52, 1135));
+                }
+                return bitmap;
+            }
+            catch { bitmap.Dispose(); throw; }
+        }
+
+        private static Font FitFont(Graphics graphics, string text, StringFormat format, int lineNumber)
+        {
+            for (float size = 42; size >= 26; size -= 1)
+            {
+                Font font = new Font("Microsoft YaHei", size, FontStyle.Regular, GraphicsUnit.Pixel);
+                if (graphics.MeasureString(text, font, Int32.MaxValue, format).Width <= 664) return font;
+                font.Dispose();
+            }
+            throw new ArgumentException("第 " + lineNumber + " 行太长，缩小字体后仍放不下。请拆到下一行或缩短文字。");
+        }
+    }
+
+    internal sealed class MessageBoardForm : Form
+    {
+        private readonly string root, python, runtime;
+        private readonly Func<Task<bool>> prepare;
+        private readonly TextBox editor = new TextBox();
+        private readonly Label lineCount = new Label();
+        private readonly PictureBox preview = new PictureBox();
+        private readonly Label notice = new Label();
+        private readonly Button render = new Button(), send = new Button(), restore = new Button(), close = new Button();
+        private readonly System.Windows.Forms.Timer draftTimer = new System.Windows.Forms.Timer();
+        private bool busy, loading, draftLoadFailed;
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, EntryPoint = "MoveFileExW", SetLastError = true)]
+        private static extern bool MoveFileEx(string existingPath, string newPath, uint flags);
+
+        internal MessageBoardForm(string projectRoot, string pythonPath, Func<Task<bool>> prepareAction)
+        {
+            root = projectRoot;
+            python = pythonPath;
+            runtime = Path.Combine(root, "runtime");
+            prepare = prepareAction;
+            Text = "Kindle 休眠留言板";
+            ClientSize = new Size(930, 665);
+            Font = new Font("Microsoft YaHei UI", 10F);
+            AutoScaleMode = AutoScaleMode.Font;
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            StartPosition = FormStartPosition.CenterParent;
+            BackColor = Color.White;
+            MaximizeBox = false;
+            MinimizeBox = true;
+            ShowInTaskbar = false;
+            Controls.Add(new Label { Text = "把提醒留在墨水屏上", Location = new Point(24, 18), Size = new Size(540, 32),
+                Font = new Font("Microsoft YaHei UI", 15F, FontStyle.Bold) });
+            Controls.Add(new Label { Text = "每行一条，最多十行；支持整段复制粘贴，编辑内容自动保存。\r\n发送会先断开扩展屏。休眠后可拔线；Kindle 重启后需重新发送。",
+                Location = new Point(26, 58), Size = new Size(555, 48), ForeColor = Color.DimGray,
+                Font = new Font("Microsoft YaHei UI", 9F) });
+            editor.Location = new Point(26, 118);
+            editor.Font = new Font("Microsoft YaHei UI", 16F);
+            editor.Multiline = true;
+            editor.AcceptsReturn = true;
+            editor.AcceptsTab = false;
+            editor.WordWrap = false;
+            editor.ScrollBars = ScrollBars.Both;
+            editor.ShortcutsEnabled = true;
+            editor.MaxLength = Int32.MaxValue;
+            editor.Size = new Size(538, editor.Font.Height * 10 + SystemInformation.HorizontalScrollBarHeight + 12);
+            editor.AccessibleName = "留言内容，每行一条，最多十行";
+            editor.KeyDown += delegate(object sender, KeyEventArgs args)
+            {
+                if (args.Control && args.KeyCode == Keys.A)
+                {
+                    editor.SelectAll();
+                    args.SuppressKeyPress = true;
+                }
+            };
+            editor.TextChanged += delegate
+            {
+                if (loading) return;
+                draftLoadFailed = false;
+                UpdateLineCount();
+                draftTimer.Stop();
+                draftTimer.Start();
+            };
+            Controls.Add(editor);
+            lineCount.Location = new Point(26, editor.Bottom + 8);
+            lineCount.Size = new Size(538, 45);
+            lineCount.Font = new Font("Microsoft YaHei UI", 9F);
+            Controls.Add(lineCount);
+            preview.Location = new Point(594, 64);
+            preview.Size = new Size(310, 452);
+            preview.SizeMode = PictureBoxSizeMode.Zoom;
+            preview.BorderStyle = BorderStyle.FixedSingle;
+            preview.BackColor = Color.FromArgb(245, 245, 245);
+            Controls.Add(preview);
+            Controls.Add(new Label { Text = "竖向封面 · 824 × 1200", Location = new Point(594, 526), Size = new Size(310, 24),
+                ForeColor = Color.DimGray, TextAlign = ContentAlignment.MiddleCenter });
+            Button[] buttons = { render, send, restore, close };
+            string[] captions = { "预览", "发送到 Kindle", "恢复原休眠封面", "关闭" };
+            int[] widths = { 98, 152, 170, 92 };
+            int x = 26;
+            int buttonsTop = Math.Max(505, lineCount.Bottom + 12);
+            for (int index = 0; index < buttons.Length; index++)
+            {
+                buttons[index].Text = captions[index];
+                buttons[index].Location = new Point(x, buttonsTop);
+                buttons[index].Size = new Size(widths[index], 38);
+                buttons[index].UseVisualStyleBackColor = true;
+                Controls.Add(buttons[index]);
+                x += widths[index] + 10;
+            }
+            notice.Location = new Point(26, buttonsTop + 60);
+            notice.Size = new Size(878, 77);
+            ClientSize = new Size(930, Math.Max(665, notice.Bottom + 23));
+            notice.ForeColor = Color.DimGray;
+            notice.Text = "先编辑并预览，再连接 USB 数据线发送。草稿只保存在本机。";
+            Controls.Add(notice);
+            render.Click += delegate { TryPreview(); };
+            send.Click += async delegate { await SendAsync(false); };
+            restore.Click += async delegate { await SendAsync(true); };
+            close.Click += delegate { Close(); };
+            draftTimer.Interval = 600;
+            draftTimer.Tick += delegate
+            {
+                draftTimer.Stop();
+                try { SaveDraft(); }
+                catch (Exception error) { SetNotice("草稿未能保存：" + error.Message, true); }
+            };
+            FormClosing += delegate(object sender, FormClosingEventArgs args)
+            {
+                if (busy) { args.Cancel = true; SetNotice("正在传输，请等待当前操作完成后关闭。", false); return; }
+                draftTimer.Stop();
+                try { SaveDraft(); }
+                catch (Exception error) { SetNotice("草稿未能保存：" + error.Message, true); args.Cancel = true; }
+            };
+            FormClosed += delegate
+            {
+                draftTimer.Stop(); draftTimer.Dispose();
+                if (preview.Image != null) { preview.Image.Dispose(); preview.Image = null; }
+            };
+            LoadDraft();
+            UpdateLineCount();
+            if (!draftLoadFailed) TryPreview();
+        }
+
+        private static string[] SplitText(string text)
+        {
+            string normalized = (text ?? "").Replace("\r\n", "\n").Replace('\r', '\n');
+            if (normalized.Length == 0) return new string[0];
+            string[] result = normalized.Split(new char[] { '\n' }, StringSplitOptions.None);
+            // A final line terminator from a copied text file does not add an
+            // eleventh line. Any preceding empty lines are still preserved.
+            if (normalized.EndsWith("\n", StringComparison.Ordinal)) Array.Resize(ref result, result.Length - 1);
+            return result;
+        }
+
+        private void UpdateLineCount()
+        {
+            int count = SplitText(editor.Text).Length;
+            bool tooMany = count > 10;
+            lineCount.Text = count.ToString(CultureInfo.InvariantCulture) + " / 10 行 · " +
+                (tooMany ? "已保留全部文字，请缩减到十行后再预览或发送。" : "自动保存到本机，下次打开继续编辑。Ctrl+A 可全选。");
+            lineCount.ForeColor = tooMany ? Color.Firebrick : Color.DimGray;
+            render.Enabled = send.Enabled = !busy && !tooMany;
+        }
+
+        private string[] ReadLines()
+        {
+            string[] content = SplitText(editor.Text);
+            if (content.Length > 10) throw new ArgumentException("留言最多十行。全部文字已保留，请缩减后再发送。");
+            string[] result = new string[10];
+            for (int index = 0; index < result.Length; index++)
+                result[index] = index < content.Length ? content[index].Replace("\t", "    ") : "";
+            return result;
+        }
+
+        private void LoadDraft()
+        {
+            string path = Path.Combine(runtime, "messageboard-draft.txt");
+            string legacyPath = Path.Combine(runtime, "messageboard-draft.json");
+            if (!File.Exists(path) && !File.Exists(legacyPath)) return;
+            loading = true;
+            try
+            {
+                string text;
+                if (File.Exists(path)) text = File.ReadAllText(path, new UTF8Encoding(false, true));
+                else
+                {
+                    // Migrate the former ten-input draft without modifying its
+                    // original JSON file. New edits are kept as plain UTF-8 text.
+                    string[] saved = new JavaScriptSerializer().Deserialize<string[]>(File.ReadAllText(legacyPath, Encoding.UTF8));
+                    if (saved == null || saved.Length != 10) throw new InvalidDataException("旧草稿行数不正确。");
+                    text = String.Join(Environment.NewLine, saved);
+                }
+                editor.Text = text.Replace("\r\n", "\n").Replace('\r', '\n').Replace("\n", Environment.NewLine);
+            }
+            catch (Exception error) { draftLoadFailed = true; SetNotice("未能读取上次草稿：" + error.Message + " 原文件已保留；编辑后会保存新草稿。", true); }
+            finally { loading = false; }
+        }
+
+        private void SaveDraft()
+        {
+            if (draftLoadFailed) return;
+            Directory.CreateDirectory(runtime);
+            string path = Path.Combine(runtime, "messageboard-draft.txt");
+            string temporary = Path.Combine(runtime, ".messageboard-draft." + Guid.NewGuid().ToString("N") + ".tmp");
+            try
+            {
+                // Save even an unfinished draft with more than ten lines. Only
+                // preview/send enforce the display limit; typing never loses data.
+                File.WriteAllText(temporary, editor.Text, new UTF8Encoding(false));
+                if (!MoveFileEx(temporary, path, 0x1 | 0x8)) throw new Win32Exception(Marshal.GetLastWin32Error());
+            }
+            finally { if (File.Exists(temporary)) File.Delete(temporary); }
+        }
+
+        private string CreatePreview(bool requireText)
+        {
+            string[] text = ReadLines();
+            bool any = false;
+            foreach (string line in text) if (!String.IsNullOrWhiteSpace(line)) { any = true; break; }
+            if (requireText && !any) throw new ArgumentException("请至少填写一行留言后再发送。");
+            Bitmap rendered = MessageBoardRenderer.Render(text);
+            try
+            {
+                Directory.CreateDirectory(runtime);
+                string path = Path.Combine(runtime, "messageboard-preview.png");
+                rendered.Save(path, System.Drawing.Imaging.ImageFormat.Png);
+                Image previous = preview.Image;
+                preview.Image = rendered;
+                rendered = null;
+                if (previous != null) previous.Dispose();
+                return path;
+            }
+            finally { if (rendered != null) rendered.Dispose(); }
+        }
+
+        private void TryPreview()
+        {
+            try { SaveDraft(); CreatePreview(false); SetNotice("预览已更新。确认文字后，连接 USB 并点击“发送到 Kindle”。", false); }
+            catch (Exception error) { SetNotice(error.Message, true); }
+        }
+
+        private async Task SendAsync(bool restoring)
+        {
+            if (busy) return;
+            string imagePath = null;
+            try
+            {
+                SaveDraft();
+                if (!restoring) imagePath = CreatePreview(true);
+                string script = Path.Combine(root, "scripts", "kindle-messageboard.py");
+                if (!File.Exists(python)) throw new FileNotFoundException("未找到 Python，请检查本机配置。", python);
+                if (!File.Exists(script)) throw new FileNotFoundException("未找到留言板后台程序，请保留完整程序目录。", script);
+                SetBusy(true);
+                SetNotice("正在准备 Kindle… 如当前正在显示电脑画面，会先断开扩展屏连接。", false);
+                if (!await prepare()) throw new InvalidOperationException("未能断开扩展屏，留言板操作尚未开始。");
+                SetNotice(restoring ? "正在恢复原休眠封面，请保持 USB 连接…" : "正在发送留言，请保持 USB 连接…", false);
+                MessageBoardResult result = await Task.Run(() => RunBackend(restoring, imagePath));
+                if (result.ExitCode != 0)
+                {
+                    string error = String.IsNullOrWhiteSpace(result.Error) ? result.Output : result.Error;
+                    throw new InvalidOperationException(String.IsNullOrWhiteSpace(error) ? "留言板操作未完成，请检查 USB 连接后重试。" : error.Trim());
+                }
+                string output = result.Output == null ? "" : result.Output.Trim();
+                SetNotice(output.Length > 0 ? output : restoring ? "原休眠封面已恢复。" : "留言已发送，Kindle 已进入休眠显示留言。可拔线保留；Kindle 完整重启后需重新发送。", false);
+            }
+            catch (Exception error) { SetNotice(error.Message, true); }
+            finally { SetBusy(false); }
+        }
+
+        private MessageBoardResult RunBackend(bool restoring, string imagePath)
+        {
+            string script = Path.Combine(root, "scripts", "kindle-messageboard.py");
+            string arguments = "\"" + script + "\" --action " + (restoring ? "restore" : "install --image \"" + imagePath + "\"");
+            ProcessStartInfo info = new ProcessStartInfo(python, arguments);
+            info.WorkingDirectory = root;
+            info.UseShellExecute = false;
+            info.CreateNoWindow = true;
+            info.WindowStyle = ProcessWindowStyle.Hidden;
+            info.RedirectStandardOutput = true;
+            info.RedirectStandardError = true;
+            info.StandardOutputEncoding = Encoding.UTF8;
+            info.StandardErrorEncoding = Encoding.UTF8;
+            info.EnvironmentVariables["PYTHONUTF8"] = "1";
+            info.EnvironmentVariables["PYTHONIOENCODING"] = "utf-8";
+            using (Process process = new Process { StartInfo = info })
+            {
+                process.Start();
+                Task<string> output = process.StandardOutput.ReadToEndAsync();
+                Task<string> error = process.StandardError.ReadToEndAsync();
+                process.WaitForExit();
+                MessageBoardResult result = new MessageBoardResult { ExitCode = process.ExitCode,
+                    Output = output.GetAwaiter().GetResult(), Error = error.GetAwaiter().GetResult() };
+                File.WriteAllText(Path.Combine(runtime, "messageboard.stdout.log"), result.Output, new UTF8Encoding(false));
+                File.WriteAllText(Path.Combine(runtime, "messageboard.stderr.log"), result.Error, new UTF8Encoding(false));
+                return result;
+            }
+        }
+
+        private void SetBusy(bool value)
+        {
+            busy = value;
+            render.Enabled = send.Enabled = restore.Enabled = close.Enabled = !value;
+            editor.ReadOnly = value;
+            UpdateLineCount();
+            UseWaitCursor = value;
+        }
+
+        private void SetNotice(string text, bool failure)
+        {
+            notice.Text = text.Length > 480 ? text.Substring(0, 480) + "…（详情见 runtime 中的留言板日志）" : text;
+            notice.ForeColor = failure ? Color.Firebrick : Color.FromArgb(35, 70, 110);
         }
     }
 }

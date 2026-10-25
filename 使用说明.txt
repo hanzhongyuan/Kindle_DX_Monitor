@@ -1,5 +1,19 @@
 Kindle DX Monitor
 
+休眠留言板
+点击主界面“休眠留言板 · 最多十行”，在一个多行文本框里编辑文字。
+每行对应一条留言，可用 Ctrl+A 全选、Ctrl+C 复制、Ctrl+V 粘贴整段内容。
+最多发送十行；超过十行会提示调整，已输入的内容会保留，不会截掉。
+可先预览，再点击“发送到 Kindle”。
+编辑内容自动保存到本机 UTF-8 文本文件 runtime/messageboard-draft.txt，未发送的修改也会保存。
+下次打开会自动加载上次内容，可直接编辑；旧版 messageboard-draft.json 记录会兼容迁移。
+本地留言和运行记录不会上传到 GitHub。
+发送时会先断开扩展显示，再设置休眠封面；请等程序提示成功。
+成功后可拔掉 USB，留言无需电脑持续刷新。
+下次修改时唤醒 Kindle、接回 USB 网络，再发送新文字。
+“恢复原休眠封面”可以撤销留言板。
+Kindle 完整重启会恢复原封面，需要重新发送；普通休眠和拔线可保留。
+
 首次安装请阅读 README.md，准备 USBNetwork、Kindle 客户端、Windows 依赖和本机配置。
 下载时保留完整目录；KindleDisplay.exe 需要配套 scripts 和运行依赖。
 
