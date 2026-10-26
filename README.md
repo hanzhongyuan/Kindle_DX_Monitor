@@ -4,8 +4,8 @@
 
 | 程序 | 用途 | 日常操作 |
 | --- | --- | --- |
-| **KindlePaperwhite2MessageBoard.exe — PW2 留言板** | Paperwhite 2 / 5.12.2.2，十行休眠封面 | 可用 USB；无线配对后，先唤醒 Kindle 再点“无线发送” |
-| **KindleMessageBoard.exe — DX 留言板** | DX Graphite / 2.5.8，十行休眠封面 | USB 网络发送；成功后可关闭程序并拔线 |
+| **KindlePaperwhite2MessageBoard.exe — PW2 留言板** | Paperwhite 2 / 5.12.2.2，可调排版的休眠封面 | 可用 USB；无线配对后，先唤醒 Kindle 再点“无线发送” |
+| **KindleMessageBoard.exe — DX 留言板** | DX Graphite / 2.5.8，可调排版的休眠封面 | USB 网络发送；成功后可关闭程序并拔线 |
 | **KindleDisplay.exe — DX 显示器** | DX Graphite 的 Windows 独立扩展屏 | 连接后把窗口拖过去，支持四个方向 |
 
 各程序有自己的窗口和任务栏入口。留言板适合待办、提醒和长期保留的文字；扩展屏有墨水屏刷新延迟，适合静态内容，不适合视频。PW2 版本只做留言板。
@@ -27,14 +27,18 @@
 
 ### Paperwhite 2 留言板
 
-设备先安装并启用 linkss，使用普通图片模式。打开 **KindlePaperwhite2MessageBoard.exe**，编辑最多十行文字并预览，再选发送方式：
+设备先安装并启用 linkss，使用普通图片模式。打开 **KindlePaperwhite2MessageBoard.exe**，选择行数、字体、字号和纵横方向，编辑文字并预览，再选发送方式：
 
 - **无线发送**：先手动唤醒 Kindle，确认电脑与 Kindle 连接同一 Wi-Fi，并拔掉 USB。确认窗口里的 IP 地址后点“无线发送”，等待书库回来，再短按电源显示封面。地址会保存，下次打开继续使用。
 - **USB发送**：接线并确认 Kindle 存储盘出现，点“USB发送”。完成后安全弹出、拔线，等待约十秒重载，再短按电源显示封面。首次启用自动重载需按提示完整重启一次。
 
 无线功能只在用户发起操作时连接，不提供远程唤醒、后台常在线或外网发送。首次无线配置和连接记录丢失后的重新配对，见 [PW2 指南](docs/PAPERWHITE2_MESSAGEBOARD.zh-CN.md)。
 
-生成竖向 **758×1024 灰度 PNG**。草稿单独保存在 `runtime/paperwhite2/messageboard-draft.txt`；第一次接管前的图片备份保存在 Kindle 的 `linkss/pw2-messageboard-backup`，本机对应的归属记录位于 `runtime/paperwhite2/devices`，两边都要保留。
+支持 **1–30 行**、本机字体和 **12–120 px** 正文字号，默认十行、微软雅黑。“自动缩小字号”默认勾选，会按行宽和行高缩小文字；取消后按指定字号排版，放不下时提示调整。减少行数不会删除草稿；超过所选行数时，增加行数或调整内容后才能预览、发送。
+
+可选纵向或横向，默认纵向。横向预览为 **1024×758** 阅读布局，发送后把 Kindle 顺时针转 90° 阅读。
+
+发送图片保持设备原生 **758×1024 灰度 PNG** 尺寸，横向时自动旋转图片内容。草稿单独保存在 `runtime/paperwhite2/messageboard-draft.txt`，排版设置保存在同目录的 `messageboard-layout.json`，下次打开继续使用；第一次接管前的图片备份保存在 Kindle 的 `linkss/pw2-messageboard-backup`，本机对应的归属记录位于 `runtime/paperwhite2/devices`，两边都要保留。
 
 “USB恢复封面”或“无线恢复封面”恢复接管前的图片，不会卸载 linkss。发送中断后按提示恢复；检测到用户新增图片或不匹配的备份时会停止覆盖。完成后等 Kindle 界面重载，再手动休眠查看结果。**本次无线代码更新未进行实际发送与恢复测试。**
 
@@ -42,14 +46,16 @@
 
 1. 唤醒 Kindle，接上 USB 数据线，保持 USB 网络模式。
 2. 双击 **KindleMessageBoard.exe**，直接进入留言编辑窗口。
-3. 在一个多行文本框里编辑，一行一条，支持 **Ctrl+A / Ctrl+C / Ctrl+V**。
+3. 选择行数、字体、字号和纵横方向，在一个多行文本框里编辑，一行一条，支持 **Ctrl+A / Ctrl+C / Ctrl+V**。
 4. 点击“预览”，再点“发送到 Kindle”，等待完成提示。
 
-超过十行会提示调整，文字不会被截掉；长行会缩小字号，仍放不下会提示。空行可保留，不能发送全部为空的内容。
+与 PW2 一样支持 **1–30 行**、本机字体和 **12–120 px** 正文字号，默认十行、微软雅黑。“自动缩小字号”默认开启，按行宽和行高适配；关闭后按指定字号排版，放不下会提示。实际效果以预览为准。超过所选行数时保留全部文字，增加行数或调整内容后再预览、发送。空行可保留，不能发送全部为空的内容。
 
-编辑自动保存为本机 **`runtime/messageboard-draft.txt`**，未发送的修改也会保存。下次打开继续编辑；旧版 JSON 草稿可兼容迁移。
+可选纵向或横向，默认纵向。横向预览为 **1200×824** 阅读布局，发送后把 Kindle 顺时针转 90° 阅读。
 
-发送后可关闭程序、拔掉 USB，留言保留在休眠封面。“恢复原休眠封面”可撤销。**Kindle 完整重启后需重新发送；普通休眠和拔线可保留。** 留言板固定使用竖向 824×1200 图片，不会自动同步网络通知。
+编辑自动保存为本机 **`runtime/messageboard-draft.txt`**，未发送的修改也会保存。排版设置保存在 **`runtime/messageboard-layout.json`**，与 PW2 分开。下次打开继续使用；旧版 JSON 草稿可兼容迁移。
+
+发送后可关闭程序、拔掉 USB，留言保留在休眠封面。“恢复原休眠封面”可撤销。**Kindle 完整重启后需重新发送；普通休眠和拔线可保留。** 留言板按所选方向排版，发送图片适配设备原生尺寸，不会自动同步网络通知。
 
 ### DX 显示器
 
@@ -72,8 +78,9 @@
 
 | 本机文件 | 内容 |
 | --- | --- |
-| `runtime/paperwhite2/` | PW2 独立草稿、封面备份记录、无线配对和日志，需要完整保留 |
+| `runtime/paperwhite2/` | PW2 独立草稿、排版设置、封面备份记录、无线配对和日志，需要完整保留 |
 | `runtime/messageboard-draft.txt` | 上次编辑的留言 |
+| `runtime/messageboard-layout.json` | DX 留言板的行数、字体、字号、方向和自动缩小设置 |
 | `runtime/messageboard-state.json` | 本程序管理 Kindle 留言图片的归属记录，需一并保留 |
 | `runtime/kindle_known_hosts` | 自己的 Kindle 主机公钥 |
 | `kindle-display.local.json` | 可选的本机路径配置 |
@@ -105,6 +112,14 @@
 ```powershell
 .\.venv\Scripts\python.exe -m unittest discover -s scripts -p 'test_*.py' -v
 ```
+
+Windows 排版与界面离线检查（行数、字体、字号、横竖预览及设置保存）：
+
+```powershell
+.\scripts\test-messageboard-layout.ps1
+```
+
+检查使用独立测试草稿，不连接 Kindle；截图保存在 `runtime/messageboard-layout-checks`。
 
 ## 第三方项目
 

@@ -862,6 +862,35 @@ namespace KindleDisplay
         internal string Output, Error;
     }
 
+    internal sealed class MessageBoardLayout
+    {
+        internal const int MinRows = 1, MaxRows = 30, MinFontSize = 12, MaxFontSize = 120;
+        public int Rows { get; set; }
+        public string FontFamily { get; set; }
+        public int FontSize { get; set; }
+        public bool AutoFit { get; set; }
+        public bool Landscape { get; set; }
+
+        public MessageBoardLayout()
+        {
+            Rows = 10; FontFamily = "Microsoft YaHei"; FontSize = 42; AutoFit = true;
+        }
+
+        internal static MessageBoardLayout DefaultFor(int height)
+        {
+            return new MessageBoardLayout { FontSize = (int)Math.Round(42F * height / 1200F) };
+        }
+
+        internal void Validate()
+        {
+            if (Rows < MinRows || Rows > MaxRows) throw new ArgumentException("显示行数须在 1 到 30 之间。");
+            if (FontSize < MinFontSize || FontSize > MaxFontSize) throw new ArgumentException("字号须在 12 到 120 像素之间。");
+            if (String.IsNullOrWhiteSpace(FontFamily)) throw new ArgumentException("请选择字体。");
+            using (FontFamily family = new FontFamily(FontFamily))
+                if (!family.IsStyleAvailable(FontStyle.Regular)) throw new ArgumentException("所选字体不支持常规字形，请换一种字体。");
+        }
+    }
+
     internal static class MessageBoardRenderer
     {
         internal static Bitmap Render(string[] lines)
@@ -871,18 +900,30 @@ namespace KindleDisplay
 
         internal static Bitmap Render(string[] lines, int width, int height)
         {
-            if (lines == null || lines.Length != 10) throw new ArgumentException("留言板需要十行文本。");
+            return Render(lines, width, height, MessageBoardLayout.DefaultFor(height));
+        }
+
+        internal static Bitmap Render(string[] lines, int width, int height, MessageBoardLayout layout)
+        {
+            if (layout == null) throw new ArgumentNullException("layout");
+            layout.Validate();
+            if (lines == null || lines.Length != layout.Rows) throw new ArgumentException("留言行数与显示行数设置不一致。");
             if (!((width == 824 && height == 1200) || (width == 758 && height == 1024)))
                 throw new ArgumentException("不支持的留言板尺寸。");
+            // Compose in reading orientation, then rotate back to the device's
+            // native raster. The existing USB/wireless image contract stays intact.
+            if (layout.Landscape) { int nativeWidth = width; width = height; height = nativeWidth; }
             float horizontalScale = width / 824F, verticalScale = height / 1200F;
             float fontScale = Math.Min(horizontalScale, verticalScale);
             float left = 52 * horizontalScale, right = width - left, textLeft = 108 * horizontalScale;
+            float rowHeight = 910 * verticalScale / layout.Rows;
+            float textHeight = rowHeight * 0.84F;
             Bitmap bitmap = new Bitmap(width, height, System.Drawing.Imaging.PixelFormat.Format24bppRgb);
             try
             {
                 using (Graphics graphics = Graphics.FromImage(bitmap))
                 using (Font title = new Font("Microsoft YaHei", 48F * fontScale, FontStyle.Bold, GraphicsUnit.Pixel))
-                using (Font number = new Font("Microsoft YaHei", 24F * fontScale, FontStyle.Regular, GraphicsUnit.Pixel))
+                using (Font number = new Font("Microsoft YaHei", Math.Min(24F * fontScale, textHeight / 1.6F), FontStyle.Regular, GraphicsUnit.Pixel))
                 using (Font footer = new Font("Microsoft YaHei", 21F * fontScale, FontStyle.Regular, GraphicsUnit.Pixel))
                 using (Pen rule = new Pen(Color.FromArgb(190, 190, 190), 1F))
                 using (StringFormat format = new StringFormat(StringFormat.GenericTypographic))
@@ -893,37 +934,43 @@ namespace KindleDisplay
                     format.Trimming = StringTrimming.None;
                     graphics.DrawString("留言板", title, Brushes.Black, new PointF(left, 48 * verticalScale));
                     graphics.DrawLine(Pens.Black, left, 126 * verticalScale, right, 126 * verticalScale);
-                    for (int index = 0; index < 10; index++)
+                    for (int index = 0; index < layout.Rows; index++)
                     {
                         string text = lines[index] ?? "";
                         if (text.IndexOfAny(new char[] { '\r', '\n', '\t' }) >= 0)
                             throw new ArgumentException("第 " + (index + 1) + " 行包含换行或制表符，请按一行一条填写。");
-                        float top = (158 + index * 91) * verticalScale;
+                        float top = 158 * verticalScale + index * rowHeight;
                         graphics.DrawString((index + 1).ToString("00", CultureInfo.InvariantCulture), number,
-                            Brushes.DimGray, new PointF(left, top + 14 * verticalScale));
-                        using (Font lineFont = FitFont(graphics, text, format, index + 1, right - textLeft, fontScale))
+                            Brushes.DimGray, new PointF(left, top + (textHeight - number.GetHeight(graphics)) / 2));
+                        using (Font lineFont = FitFont(graphics, text, format, index + 1, right - textLeft, textHeight, layout))
                             graphics.DrawString(text, lineFont, Brushes.Black, new PointF(textLeft,
-                                top + (60 * verticalScale - lineFont.GetHeight(graphics)) / 2), format);
-                        graphics.DrawLine(rule, textLeft, top + 69 * verticalScale, right, top + 69 * verticalScale);
+                                top + (textHeight - lineFont.GetHeight(graphics)) / 2), format);
+                        graphics.DrawLine(rule, textLeft, top + rowHeight * 0.92F, right, top + rowHeight * 0.92F);
                     }
                     graphics.DrawString("更新于 " + DateTime.Now.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture), footer,
                         Brushes.DimGray, new PointF(left, 1135 * verticalScale));
                 }
+                if (layout.Landscape) bitmap.RotateFlip(RotateFlipType.Rotate270FlipNone);
                 return bitmap;
             }
             catch { bitmap.Dispose(); throw; }
         }
 
         private static Font FitFont(Graphics graphics, string text, StringFormat format, int lineNumber,
-            float availableWidth, float fontScale)
+            float availableWidth, float availableHeight, MessageBoardLayout layout)
         {
-            for (float size = 42; size >= 26; size -= 1)
+            // Blank rows still draw their rule but do not constrain the chosen font.
+            if (String.IsNullOrWhiteSpace(text)) return new Font(layout.FontFamily, MessageBoardLayout.MinFontSize, FontStyle.Regular, GraphicsUnit.Pixel);
+            int minimum = layout.AutoFit ? MessageBoardLayout.MinFontSize : layout.FontSize;
+            for (int size = layout.FontSize; size >= minimum; size--)
             {
-                Font font = new Font("Microsoft YaHei", size * fontScale, FontStyle.Regular, GraphicsUnit.Pixel);
-                if (graphics.MeasureString(text, font, Int32.MaxValue, format).Width <= availableWidth) return font;
+                Font font = new Font(layout.FontFamily, size, FontStyle.Regular, GraphicsUnit.Pixel);
+                if (font.GetHeight(graphics) <= availableHeight &&
+                    graphics.MeasureString(text, font, Int32.MaxValue, format).Width <= availableWidth) return font;
                 font.Dispose();
             }
-            throw new ArgumentException("第 " + lineNumber + " 行太长，缩小字体后仍放不下。请拆到下一行或缩短文字。");
+            throw new ArgumentException("第 " + lineNumber + " 行在当前行数和字号下放不下。请缩短文字、减小字号或减少显示行数。" +
+                (layout.AutoFit ? "自动缩小至 12 像素后仍需调整。" : "也可勾选“自动缩小字号”。"));
         }
     }
 
@@ -932,14 +979,19 @@ namespace KindleDisplay
         private readonly string root, python, runtime;
         private readonly MessageBoardProfile profile;
         private readonly TextBox editor = new TextBox();
+        private readonly NumericUpDown rowChoice = new NumericUpDown(), fontSizeChoice = new NumericUpDown();
+        private readonly ComboBox fontChoice = new ComboBox();
+        private readonly ComboBox orientationChoice = new ComboBox();
+        private readonly CheckBox autoFit = new CheckBox();
         private readonly Label lineCount = new Label();
         private readonly PictureBox preview = new PictureBox();
+        private readonly Label previewCaption = new Label();
         private readonly Label notice = new Label();
         private readonly Button render = new Button(), send = new Button(), restore = new Button(), close = new Button();
         private readonly Button wirelessSend = new Button(), wirelessRestore = new Button(), saveWirelessAddress = new Button();
         private readonly TextBox wirelessAddress = new TextBox();
         private readonly System.Windows.Forms.Timer draftTimer = new System.Windows.Forms.Timer();
-        private bool busy, loading, draftLoadFailed;
+        private bool busy, loading, draftLoadFailed, layoutLoadFailed;
 
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, EntryPoint = "MoveFileExW", SetLastError = true)]
         private static extern bool MoveFileEx(string existingPath, string newPath, uint flags);
@@ -955,6 +1007,7 @@ namespace KindleDisplay
             python = pythonPath;
             profile = selectedProfile;
             runtime = Path.Combine(root, "runtime", profile.RuntimeSubdirectory);
+            loading = true;
             Text = profile.Title;
             ClientSize = new Size(930, 665);
             Font = new Font("Microsoft YaHei UI", 10F);
@@ -968,11 +1021,64 @@ namespace KindleDisplay
             Controls.Add(new Label { Text = "把提醒留在墨水屏上", Location = new Point(24, 18), Size = new Size(540, 32),
                 Font = new Font("Microsoft YaHei UI", 15F, FontStyle.Bold) });
             Controls.Add(new Label { Text = profile.UsbStorage
-                ? "最多十行，编辑自动保存。USB 或无线均可发送到 Paperwhite 2。\r\n无线发送前请先唤醒 Kindle，让电脑与 Kindle 连接同一 Wi-Fi。"
-                : "最多十行，支持整段粘贴并自动保存；扩展屏运行时需先手动断开。\r\n休眠后可拔线；Kindle 重启后需重新发送。",
+                ? "行数、字体、字号和横竖方向可调，文字与设置自动保存。\r\n无线发送前请先唤醒 Kindle，让电脑与 Kindle 连接同一 Wi-Fi。"
+                : "行数、字体、字号和方向可调；发送前请先断开扩展屏。\r\n文字与设置自动保存。休眠后可拔线；Kindle 重启后需重新发送。",
                 Location = new Point(26, 58), Size = new Size(555, 48), ForeColor = Color.DimGray,
                 Font = new Font("Microsoft YaHei UI", 9F) });
-            editor.Location = new Point(26, 118);
+            Controls.Add(new Label { Text = "行数", Location = new Point(26, 115), Size = new Size(40, 24) });
+            rowChoice.Location = new Point(66, 112);
+            rowChoice.Size = new Size(58, 28);
+            rowChoice.Minimum = MessageBoardLayout.MinRows; rowChoice.Maximum = MessageBoardLayout.MaxRows;
+            rowChoice.Value = 10;
+            rowChoice.AccessibleName = "封面显示行数";
+            Controls.Add(rowChoice);
+            Controls.Add(new Label { Text = "字体", Location = new Point(136, 115), Size = new Size(40, 24) });
+            fontChoice.Location = new Point(176, 112);
+            fontChoice.Size = new Size(205, 28);
+            fontChoice.DropDownStyle = ComboBoxStyle.DropDownList;
+            fontChoice.DropDownWidth = 300;
+            fontChoice.Sorted = true;
+            fontChoice.AccessibleName = "封面正文字体";
+            foreach (FontFamily family in FontFamily.Families)
+            {
+                using (family)
+                    if (family.IsStyleAvailable(FontStyle.Regular)) fontChoice.Items.Add(family.Name);
+            }
+            using (FontFamily defaultFamily = new FontFamily("Microsoft YaHei")) fontChoice.SelectedItem = defaultFamily.Name;
+            if (fontChoice.SelectedIndex < 0)
+                using (FontFamily fallbackFamily = FontFamily.GenericSansSerif) fontChoice.SelectedItem = fallbackFamily.Name;
+            if (fontChoice.SelectedIndex < 0 && fontChoice.Items.Count > 0) fontChoice.SelectedIndex = 0;
+            Controls.Add(fontChoice);
+            Controls.Add(new Label { Text = "字号", Location = new Point(393, 115), Size = new Size(40, 24) });
+            fontSizeChoice.Location = new Point(435, 112);
+            fontSizeChoice.Size = new Size(68, 28);
+            fontSizeChoice.Minimum = MessageBoardLayout.MinFontSize; fontSizeChoice.Maximum = MessageBoardLayout.MaxFontSize;
+            fontSizeChoice.Value = MessageBoardLayout.DefaultFor(profile.Height).FontSize;
+            fontSizeChoice.AccessibleName = "封面正文字号（像素）";
+            Controls.Add(fontSizeChoice);
+            Controls.Add(new Label { Text = "像素", Location = new Point(511, 115), Size = new Size(48, 24) });
+            Controls.Add(new Label { Text = "方向", Location = new Point(26, 150), Size = new Size(40, 24) });
+            orientationChoice.Location = new Point(66, 147);
+            orientationChoice.Size = new Size(98, 28);
+            orientationChoice.DropDownStyle = ComboBoxStyle.DropDownList;
+            orientationChoice.Items.AddRange(new object[] { "纵向", "横向" });
+            orientationChoice.SelectedIndex = 0;
+            orientationChoice.AccessibleName = "封面显示方向";
+            Controls.Add(orientationChoice);
+            autoFit.Text = "自动缩小字号";
+            autoFit.Location = new Point(176, 147);
+            autoFit.Size = new Size(144, 26);
+            autoFit.Checked = true;
+            Controls.Add(autoFit);
+            Controls.Add(new Label { Text = "按行宽和行高缩小；\r\n取消勾选可固定字号。",
+                Location = new Point(330, 146), Size = new Size(234, 43), ForeColor = Color.DimGray,
+                Font = new Font("Microsoft YaHei UI", 9F) });
+            rowChoice.ValueChanged += LayoutChanged;
+            fontChoice.SelectedIndexChanged += LayoutChanged;
+            fontSizeChoice.ValueChanged += LayoutChanged;
+            autoFit.CheckedChanged += LayoutChanged;
+            orientationChoice.SelectedIndexChanged += LayoutChanged;
+            editor.Location = new Point(26, 194);
             editor.Font = new Font("Microsoft YaHei UI", 16F);
             editor.Multiline = true;
             editor.AcceptsReturn = true;
@@ -981,8 +1087,8 @@ namespace KindleDisplay
             editor.ScrollBars = ScrollBars.Both;
             editor.ShortcutsEnabled = true;
             editor.MaxLength = Int32.MaxValue;
-            editor.Size = new Size(538, editor.Font.Height * 10 + SystemInformation.HorizontalScrollBarHeight + 12);
-            editor.AccessibleName = "留言内容，每行一条，最多十行";
+            editor.Size = new Size(538, 249);
+            editor.AccessibleName = "留言内容，每行一条，行数可在上方设置";
             editor.KeyDown += delegate(object sender, KeyEventArgs args)
             {
                 if (args.Control && args.KeyCode == Keys.A)
@@ -996,6 +1102,7 @@ namespace KindleDisplay
                 if (loading) return;
                 draftLoadFailed = false;
                 UpdateLineCount();
+                ClearPreview();
                 draftTimer.Stop();
                 draftTimer.Start();
             };
@@ -1010,9 +1117,12 @@ namespace KindleDisplay
             preview.BorderStyle = BorderStyle.FixedSingle;
             preview.BackColor = Color.FromArgb(245, 245, 245);
             Controls.Add(preview);
-            Controls.Add(new Label { Text = "竖向封面 · " + profile.Width + " × " + profile.Height,
-                Location = new Point(594, preview.Bottom + 10), Size = new Size(310, 24),
-                ForeColor = Color.DimGray, TextAlign = ContentAlignment.MiddleCenter });
+            previewCaption.Location = new Point(594, preview.Bottom + 10);
+            previewCaption.Size = new Size(310, 44);
+            previewCaption.ForeColor = Color.DimGray;
+            previewCaption.TextAlign = ContentAlignment.TopCenter;
+            previewCaption.Font = new Font("Microsoft YaHei UI", 9F);
+            Controls.Add(previewCaption);
             Button[] buttons = profile.UsbStorage
                 ? new Button[] { render, send, wirelessSend, restore, wirelessRestore, close }
                 : new Button[] { render, send, restore, close };
@@ -1024,7 +1134,7 @@ namespace KindleDisplay
             int buttonsTop = Math.Max(505, lineCount.Bottom + 12);
             if (profile.UsbStorage)
             {
-                int addressTop = Math.Max(buttonsTop, preview.Bottom + 42);
+                int addressTop = Math.Max(buttonsTop, previewCaption.Bottom + 8);
                 Controls.Add(new Label { Text = "Kindle IP 地址", Location = new Point(26, addressTop + 6), Size = new Size(108, 24) });
                 wirelessAddress.Location = new Point(140, addressTop + 3);
                 wirelessAddress.Size = new Size(182, 28);
@@ -1055,7 +1165,7 @@ namespace KindleDisplay
                 Controls.Add(buttons[index]);
                 x += widths[index] + 10;
             }
-            notice.Location = new Point(26, buttonsTop + 60);
+            notice.Location = new Point(26, Math.Max(buttonsTop + 60, previewCaption.Bottom + 12));
             notice.Size = new Size(878, 77);
             ClientSize = new Size(930, Math.Max(665, notice.Bottom + 23));
             notice.ForeColor = Color.DimGray;
@@ -1073,25 +1183,93 @@ namespace KindleDisplay
             draftTimer.Tick += delegate
             {
                 draftTimer.Stop();
-                try { SaveDraft(); }
-                catch (Exception error) { SetNotice("草稿未能保存：" + error.Message, true); }
+                try { SaveLocalState(); }
+                catch (Exception error) { SetNotice("文字或排版设置未能保存：" + error.Message, true); }
             };
             FormClosing += delegate(object sender, FormClosingEventArgs args)
             {
                 if (busy) { args.Cancel = true; SetNotice("正在传输，请等待当前操作完成后关闭。", false); return; }
                 draftTimer.Stop();
-                try { SaveDraft(); }
-                catch (Exception error) { SetNotice("草稿未能保存：" + error.Message, true); args.Cancel = true; }
+                try { SaveLocalState(); }
+                catch (Exception error) { SetNotice("文字或排版设置未能保存：" + error.Message, true); args.Cancel = true; }
             };
             FormClosed += delegate
             {
                 draftTimer.Stop(); draftTimer.Dispose();
                 if (preview.Image != null) { preview.Image.Dispose(); preview.Image = null; }
             };
+            LoadLayout();
             LoadDraft();
+            loading = false;
             UpdateLineCount();
-            if (!draftLoadFailed) TryPreview();
+            if (!draftLoadFailed && !layoutLoadFailed) TryPreview();
             if (profile.UsbStorage) LoadWirelessAddress();
+        }
+
+        private MessageBoardLayout ReadLayout()
+        {
+            return new MessageBoardLayout { Rows = (int)rowChoice.Value,
+                FontFamily = fontChoice.SelectedItem as string, FontSize = (int)fontSizeChoice.Value,
+                AutoFit = autoFit.Checked, Landscape = orientationChoice.SelectedIndex == 1 };
+        }
+
+        private void LayoutChanged(object sender, EventArgs args)
+        {
+            if (loading) return;
+            layoutLoadFailed = false;
+            UpdateLineCount();
+            ClearPreview();
+            draftTimer.Stop();
+            draftTimer.Start();
+            SetNotice("排版已更改，点击“预览”查看新的行数、文字大小和方向。", false);
+        }
+
+        private void ClearPreview()
+        {
+            Image previous = preview.Image;
+            preview.Image = null;
+            if (previous != null) previous.Dispose();
+        }
+
+        private void LoadLayout()
+        {
+            string path = Path.Combine(runtime, "messageboard-layout.json");
+            if (!File.Exists(path)) return;
+            try
+            {
+                if (new FileInfo(path).Length > 65536) throw new InvalidDataException("排版设置文件过大。");
+                MessageBoardLayout saved = new JavaScriptSerializer().Deserialize<MessageBoardLayout>(File.ReadAllText(path, Encoding.UTF8));
+                if (saved == null) throw new InvalidDataException("排版设置为空。");
+                saved.Validate();
+                int fontIndex;
+                using (FontFamily family = new FontFamily(saved.FontFamily)) fontIndex = fontChoice.FindStringExact(family.Name);
+                if (fontIndex < 0) throw new InvalidDataException("本机未安装已保存的字体，请重新选择。");
+                rowChoice.Value = saved.Rows;
+                fontSizeChoice.Value = saved.FontSize;
+                fontChoice.SelectedIndex = fontIndex;
+                autoFit.Checked = saved.AutoFit;
+                orientationChoice.SelectedIndex = saved.Landscape ? 1 : 0;
+            }
+            catch (Exception error)
+            {
+                layoutLoadFailed = true;
+                SetNotice("未能读取上次排版：" + error.Message + " 原文件已保留；当前使用默认排版，调整设置后保存新排版。", true);
+            }
+        }
+
+        private void SaveLocalState()
+        {
+            SaveDraft();
+            if (layoutLoadFailed) return;
+            Directory.CreateDirectory(runtime);
+            string path = Path.Combine(runtime, "messageboard-layout.json");
+            string temporary = Path.Combine(runtime, ".messageboard-layout." + Guid.NewGuid().ToString("N") + ".tmp");
+            try
+            {
+                File.WriteAllText(temporary, new JavaScriptSerializer().Serialize(ReadLayout()), new UTF8Encoding(false));
+                if (!MoveFileEx(temporary, path, 0x1 | 0x8)) throw new Win32Exception(Marshal.GetLastWin32Error());
+            }
+            finally { if (File.Exists(temporary)) File.Delete(temporary); }
         }
 
         private Dictionary<string, object> ReadWirelessSettings()
@@ -1170,7 +1348,7 @@ namespace KindleDisplay
             if (normalized.Length == 0) return new string[0];
             string[] result = normalized.Split(new char[] { '\n' }, StringSplitOptions.None);
             // A final line terminator from a copied text file does not add an
-            // eleventh line. Any preceding empty lines are still preserved.
+            // extra row. Any preceding empty lines are still preserved.
             if (normalized.EndsWith("\n", StringComparison.Ordinal)) Array.Resize(ref result, result.Length - 1);
             return result;
         }
@@ -1178,9 +1356,14 @@ namespace KindleDisplay
         private void UpdateLineCount()
         {
             int count = SplitText(editor.Text).Length;
-            bool tooMany = count > 10;
-            lineCount.Text = count.ToString(CultureInfo.InvariantCulture) + " / 10 行 · " +
-                (tooMany ? "已保留全部文字，请缩减到十行后再预览或发送。" : "自动保存到本机，下次打开继续编辑。Ctrl+A 可全选。");
+            int rows = (int)rowChoice.Value;
+            bool landscape = orientationChoice.SelectedIndex == 1;
+            previewCaption.Text = (landscape ? "横向封面 · " : "纵向封面 · ") +
+                (landscape ? profile.Height : profile.Width) + " × " + (landscape ? profile.Width : profile.Height) +
+                (landscape ? "\r\n将 Kindle 顺时针旋转 90° 阅读" : "");
+            bool tooMany = count > rows;
+            lineCount.Text = count.ToString(CultureInfo.InvariantCulture) + " / " + rows.ToString(CultureInfo.InvariantCulture) + " 行 · " +
+                (tooMany ? "已保留全部文字，请增加显示行数或精简内容后再预览、发送。" : "文字与排版自动保存。调整后点“预览”查看；Ctrl+A 可全选。");
             lineCount.ForeColor = tooMany ? Color.Firebrick : Color.DimGray;
             render.Enabled = send.Enabled = wirelessSend.Enabled = !busy && !tooMany;
         }
@@ -1188,8 +1371,9 @@ namespace KindleDisplay
         private string[] ReadLines()
         {
             string[] content = SplitText(editor.Text);
-            if (content.Length > 10) throw new ArgumentException("留言最多十行。全部文字已保留，请缩减后再发送。");
-            string[] result = new string[10];
+            int rows = (int)rowChoice.Value;
+            if (content.Length > rows) throw new ArgumentException("文字超过设置的 " + rows + " 行。全部文字已保留，请增加显示行数或精简内容后再发送。");
+            string[] result = new string[rows];
             for (int index = 0; index < result.Length; index++)
                 result[index] = index < content.Length ? content[index].Replace("\t", "    ") : "";
             return result;
@@ -1227,7 +1411,7 @@ namespace KindleDisplay
             string temporary = Path.Combine(runtime, ".messageboard-draft." + Guid.NewGuid().ToString("N") + ".tmp");
             try
             {
-                // Save even an unfinished draft with more than ten lines. Only
+                // Save even an unfinished draft exceeding the selected rows. Only
                 // preview/send enforce the display limit; typing never loses data.
                 File.WriteAllText(temporary, editor.Text, new UTF8Encoding(false));
                 if (!MoveFileEx(temporary, path, 0x1 | 0x8)) throw new Win32Exception(Marshal.GetLastWin32Error());
@@ -1241,12 +1425,15 @@ namespace KindleDisplay
             bool any = false;
             foreach (string line in text) if (!String.IsNullOrWhiteSpace(line)) { any = true; break; }
             if (requireText && !any) throw new ArgumentException("请至少填写一行留言后再发送。");
-            Bitmap rendered = MessageBoardRenderer.Render(text, profile.Width, profile.Height);
+            Bitmap rendered = MessageBoardRenderer.Render(text, profile.Width, profile.Height, ReadLayout());
             try
             {
                 Directory.CreateDirectory(runtime);
                 string path = Path.Combine(runtime, "messageboard-preview.png");
                 rendered.Save(path, System.Drawing.Imaging.ImageFormat.Png);
+                // Show the reading orientation on the PC, while the saved PNG
+                // above is always the native device size required by the backend.
+                if (orientationChoice.SelectedIndex == 1) rendered.RotateFlip(RotateFlipType.Rotate90FlipNone);
                 Image previous = preview.Image;
                 preview.Image = rendered;
                 rendered = null;
@@ -1260,12 +1447,12 @@ namespace KindleDisplay
         {
             try
             {
-                SaveDraft(); CreatePreview(false);
+                SaveLocalState(); CreatePreview(false);
                 SetNotice(profile.UsbStorage
                     ? "预览已更新。可接线后点“USB发送”，或先唤醒 Kindle、拔掉 USB，再点“无线发送”。"
                     : "预览已更新。确认文字后，连接 USB 并点击“发送到 Kindle”。", false);
             }
-            catch (Exception error) { SetNotice(error.Message, true); }
+            catch (Exception error) { ClearPreview(); SetNotice(error.Message, true); }
         }
 
         private Task SendAsync(bool restoring)
@@ -1279,7 +1466,8 @@ namespace KindleDisplay
             string imagePath = null;
             try
             {
-                SaveDraft();
+                draftTimer.Stop();
+                SaveLocalState();
                 if (!restoring) imagePath = CreatePreview(true);
                 if (wireless)
                 {
@@ -1390,6 +1578,7 @@ namespace KindleDisplay
             busy = value;
             render.Enabled = send.Enabled = restore.Enabled = close.Enabled = wirelessSend.Enabled = wirelessRestore.Enabled = saveWirelessAddress.Enabled = !value;
             wirelessAddress.Enabled = !value;
+            rowChoice.Enabled = fontChoice.Enabled = fontSizeChoice.Enabled = autoFit.Enabled = orientationChoice.Enabled = !value;
             editor.ReadOnly = value;
             UpdateLineCount();
             UseWaitCursor = value;

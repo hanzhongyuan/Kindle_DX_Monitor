@@ -1,9 +1,9 @@
 Kindle DX Monitor — 按机型选择程序
 
 Paperwhite 2 专用：KindlePaperwhite2MessageBoard.exe
-只做十行休眠封面，不做扩展显示器；适用固件 5.12.2.2。
+只做可调排版的休眠封面，不做扩展显示器；适用固件 5.12.2.2。
 首次先读 docs/PAPERWHITE2_MESSAGEBOARD.zh-CN.md，完成设备越狱及 linkss 屏保插件配置。
-USB方式：接数据线，确认Kindle存储盘出现 → 编辑或粘贴最多十行 → 预览 → USB发送 → 等待完成 → 安全弹出并拔线。
+USB方式：接数据线，确认Kindle存储盘出现 → 选择行数、字体和字号，编辑或粘贴文字 → 预览 → USB发送 → 等待完成 → 安全弹出并拔线。
 首次启用自动重载后，按提示完整重启一次；以后拔线约十秒后会重新载入界面，再短按电源显示封面。
 无线方式需先按指南完成一次设备配对，以后：手动唤醒Kindle → 电脑和Kindle连同一Wi-Fi、拔掉USB → 预览 → 无线发送 → 等书库回来 → 短按电源显示封面。
 窗口里的“Kindle IP 地址”会记住上次设置；地址变了，修改后点“保存地址”。
@@ -11,6 +11,11 @@ USB方式：接数据线，确认Kindle存储盘出现 → 编辑或粘贴最多
 “USB恢复封面”和“无线恢复封面”均还原程序接管前的屏保图片，不卸载插件；按所选方式连接后使用。
 无线配对记录丢失时，可用USB运行pw2-wireless-setup.py重新配对，不需重新越狱；原封面备份记录仍需保留。
 PW2 草稿保存在 runtime/paperwhite2/messageboard-draft.txt，与 DX 分开。
+可选 1–30 行、本机字体和 12–120 px 正文字号，默认十行、微软雅黑。
+可选纵向或横向，默认纵向；横向预览为 1024×758，发送后把 Kindle 顺时针转 90° 阅读。
+“自动缩小字号”默认开启，按行宽和行高适配；关闭后按指定字号显示，放不下时需调整。
+减少行数不会删掉文字；超过所选行数时，增加行数或调整内容后才能预览和发送。
+排版设置保存在 runtime/paperwhite2/messageboard-layout.json，下次打开继续使用；图片仍为 758×1024。
 保留整个 runtime/paperwhite2，以及 Kindle 的 linkss/pw2-messageboard-backup。
 本次无线代码更新未进行实际发送与恢复测试。电脑提示完成后，还需在Kindle上确认显示结果。
 
@@ -24,13 +29,17 @@ https://github.com/hanzhongyuan/Kindle_DX_Monitor
 一、Kindle 留言板：KindleMessageBoard.exe
 双击直接进入留言编辑窗口，不需要先打开显示器程序。
 1. 唤醒 Kindle，接上 USB 数据线，保持 USB 网络模式。
-2. 在一个多行文本框里编辑或粘贴文字，每行一条，最多十行。
+2. 选择行数、字体和字号，在一个多行文本框里编辑或粘贴文字，每行一条。
 3. 点击“预览”，再点“发送到 Kindle”，等待完成提示。
 4. 成功后可以关闭程序、拔线，文字保留在 Kindle 的休眠封面。
 
 支持 Ctrl+A 全选、Ctrl+C 复制、Ctrl+V 粘贴整段内容，Enter 换行。
-超过十行会提示调整，输入内容不会截掉。
+与 PW2 一样可选 1–30 行、本机字体和 12–120 px 正文字号，默认十行、微软雅黑。
+可选纵向或横向，默认纵向；横向预览为 1200×824，发送后把 Kindle 顺时针转 90° 阅读。
+“自动缩小字号”默认开启，按行宽和行高适配；关闭后按指定字号显示，放不下时需调整。
+超过所选行数会保留全部文字，增加行数或调整内容后再预览和发送。
 编辑自动保存在本机 runtime/messageboard-draft.txt，未发送的修改也会保存。
+排版设置保存在 runtime/messageboard-layout.json，与 PW2 分开；图片仍为 824×1200。
 下次打开继续编辑；旧版 JSON 草稿兼容读取。
 “恢复原休眠封面”可以撤销留言板；关闭窗口只保存草稿并退出。
 Kindle 完整重启会恢复原封面，需要重新发送；普通休眠和拔线可保留。
@@ -77,6 +86,6 @@ Kindle 重启后若变为存储盘：安全弹出并拔线，按 Home，直接�
 私人留言和本机运行记录不随仓库发布。
 升级前关闭两个程序并备份旧项目文件夹，将新版内容覆盖到旧目录。
 保留整个 runtime、.venv 和本机配置；不要删除旧目录后重新下载。
-特别保留 messageboard-draft.txt、messageboard-state.json 和 kindle_known_hosts。
+特别保留 messageboard-draft.txt、messageboard-layout.json、messageboard-state.json 和 kindle_known_hosts。
 扩展屏用户还需保留 virtual-display-install.json 与 scripts/display-baseline.json。
 新电脑需要重新创建 Python 环境，具体见新手指南。
