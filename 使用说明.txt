@@ -3,15 +3,16 @@ Kindle DX Monitor — 按机型选择程序
 Paperwhite 2 专用：KindlePaperwhite2MessageBoard.exe
 只做十行休眠封面，不做扩展显示器；适用固件 5.12.2.2。
 首次先读 docs/PAPERWHITE2_MESSAGEBOARD.zh-CN.md，完成设备越狱及 linkss 屏保插件配置。
-连接后保持 Kindle 存储盘模式，不需要 USBNetwork、SSH 或网卡设置。
-编辑或粘贴最多十行 → 预览 → 发送到 Kindle → 等待写入完成 → 安全弹出并拔线。
-首次启用自动重载后，需要按提示在 Kindle 上完整重启一次。
-以后拔线约十秒后会重新载入界面，再短按电源显示封面。
-若没有刷新，使用 KUAL → Screen Savers → Restart framework now。
-“恢复之前的封面”还原程序接管前的屏保图片，不卸载插件。
+USB方式：接数据线，确认Kindle存储盘出现 → 编辑或粘贴最多十行 → 预览 → USB发送 → 等待完成 → 安全弹出并拔线。
+首次启用自动重载后，按提示完整重启一次；以后拔线约十秒后会重新载入界面，再短按电源显示封面。
+无线方式需先按指南完成一次设备配对，以后：手动唤醒Kindle → 电脑和Kindle连同一Wi-Fi、拔掉USB → 预览 → 无线发送 → 等书库回来 → 短按电源显示封面。
+窗口里的“Kindle IP 地址”会记住上次设置；地址变了，修改后点“保存地址”。
+程序不提供远程唤醒、后台常在线或外网发送。
+“USB恢复封面”和“无线恢复封面”均还原程序接管前的屏保图片，不卸载插件；按所选方式连接后使用。
+无线配对记录丢失时，可用USB运行pw2-wireless-setup.py重新配对，不需重新越狱；原封面备份记录仍需保留。
 PW2 草稿保存在 runtime/paperwhite2/messageboard-draft.txt，与 DX 分开。
 保留整个 runtime/paperwhite2，以及 Kindle 的 linkss/pw2-messageboard-backup。
-此版本未做 PW2 实机验证。电脑提示写入完成后，还需在 Kindle 上确认显示结果。
+本次无线代码更新未进行实际发送与恢复测试。电脑提示完成后，还需在Kindle上确认显示结果。
 
 以下为原有 DX Graphite 程序：
 

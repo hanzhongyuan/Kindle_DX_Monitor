@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Write a PW2 message image through USB storage and the existing linkss plugin.
+"""Write a PW2 message image through USB storage or a paired SSH connection.
 
-No SSH, firmware installation, device restart, or drive ejection is performed.
+Wireless writes reload the installed linkss plugin without simulating power.
 Original images are backed up before any replacement. Disconnecting during a
 write leaves a journal; Restore can recover only files belonging to that change.
 """
@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
+from contextlib import contextmanager
 import ctypes
 import datetime as dt
 import hashlib
@@ -21,6 +22,8 @@ import stat
 import subprocess
 import sys
 import uuid
+
+from pw2_wireless import RemotePath, WirelessSession, explain_error
 
 PROJECT = Path(__file__).resolve().parent.parent
 RUNTIME = PROJECT / "runtime" / "paperwhite2"
@@ -51,6 +54,8 @@ def digest(data):
 
 def plain_path(path, *, directory=False, missing=False):
     """Refuse junctions/symlinks, including every ancestor of a managed path."""
+    if isinstance(path, RemotePath):
+        return path.plain(directory=directory, missing=missing)
     path = Path(path)
     for item in reversed((path,) + tuple(path.parents)):
         try:
@@ -79,6 +84,9 @@ def read_json(path):
 
 
 def atomic_bytes(path, data):
+    if isinstance(path, RemotePath):
+        path.atomic_bytes(data)
+        return
     plain_path(path.parent, directory=True)
     plain_path(path, missing=True)
     temporary = path.with_name(path.name + ".tmp-" + uuid.uuid4().hex)
@@ -95,6 +103,46 @@ def atomic_bytes(path, data):
 
 def atomic_json(path, value):
     atomic_bytes(path, (json.dumps(value, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
+
+
+def exclusive_bytes(path, data):
+    if isinstance(path, RemotePath):
+        path.write_exclusive(data)
+        return
+    with path.open("xb") as stream:
+        stream.write(data)
+        stream.flush()
+        os.fsync(stream.fileno())
+
+
+@contextmanager
+def operation_lock(device_id):
+    """Serialize USB and wireless actions against their shared local journal."""
+    plain_path(RUNTIME, directory=True, missing=True)
+    RUNTIME.mkdir(parents=True, exist_ok=True)
+    path = plain_path(RUNTIME / ("operation-" + device_id + ".lock"), missing=True)
+    with path.open("a+b") as stream:
+        if path.stat().st_size == 0:
+            stream.write(b"\0")
+            stream.flush()
+        stream.seek(0)
+        try:
+            if os.name == "nt":
+                import msvcrt
+                msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as error:
+            raise RuntimeError("这台 Kindle 的另一项留言板操作还未完成，请稍后重试。") from error
+        try:
+            yield
+        finally:
+            stream.seek(0)
+            if os.name == "nt":
+                msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
 
 
 def discover():
@@ -157,7 +205,7 @@ def read_images(folder):
     plain_path(folder, directory=True)
     images = {}
     total = 0
-    for path in sorted(folder.iterdir()):
+    for path in sorted(folder.iterdir(), key=lambda item: item.name):
         plain_path(path)
         if path.suffix != ".png":
             raise RuntimeError("屏保目录含有非 PNG 文件，请先备份并整理后重试：" + path.name)
@@ -385,10 +433,7 @@ class MessageBoard:
         for name, data in desired.items():
             path = self.images / name
             plain_path(path, missing=True)
-            with path.open("xb") as stream:
-                stream.write(data)
-                stream.flush()
-                os.fsync(stream.fileno())
+            exclusive_bytes(path, data)
         if hashes(read_images(self.images)) != hashes(desired):
             raise RuntimeError("屏保写入校验失败，请重新连接后点击“恢复之前的封面”。")
 
@@ -438,6 +483,13 @@ class MessageBoard:
             return "manual"
         return self.request_reload(manifest)
 
+    def verify_connection(self):
+        get_drive_type = ctypes.windll.kernel32.GetDriveTypeW
+        get_drive_type.argtypes = [ctypes.c_wchar_p]
+        get_drive_type.restype = ctypes.c_uint
+        if get_drive_type(str(self.root)) not in (2, 3):
+            raise RuntimeError("Kindle 存储盘已断开，请重新连接。")
+
     def install(self, payload):
         self.inspect()
         current = read_images(self.images)
@@ -445,11 +497,7 @@ class MessageBoard:
         if manifest is None:
             manifest = self.create_backup(current)
         self.validate_current(manifest, current)
-        get_drive_type = ctypes.windll.kernel32.GetDriveTypeW
-        get_drive_type.argtypes = [ctypes.c_wchar_p]
-        get_drive_type.restype = ctypes.c_uint
-        if get_drive_type(str(self.root)) not in (2, 3):
-            raise RuntimeError("Kindle 存储盘已断开，请重新连接。")
+        self.verify_connection()
         atomic_bytes(self.backup / "staged.png", payload)
         manifest.update(phase="pending", pending_hash=digest(payload), pending_action="install")
         atomic_json(self.manifest_path, manifest)
@@ -478,23 +526,76 @@ class MessageBoard:
         return "已恢复本程序接管前的屏保图片，并还原本程序新增的自动重载设置。备份仍保留；这不会卸载屏保插件。" + self.reload_notice(mode)
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--action", choices=("install", "restore", "status"), required=True)
-    parser.add_argument("--image")
-    args = parser.parse_args()
-    if (args.action == "install") != bool(args.image):
-        parser.error("only --action install requires --image")
-    try:
-        payload = prepare_image(args.image) if args.action == "install" else None
-        board = MessageBoard(discover())
-        if args.action == "status":
+class WirelessMessageBoard(MessageBoard):
+    def __init__(self, session):
+        super().__init__(session.device)
+        self.session = session
+        self.reload_error = ""
+
+    def inspect(self):
+        self.session.guard()
+        result = super().inspect()
+        plain_path(self.root / "extensions/linkss/bin/linkss.sh")
+        result.update(transport="wireless", host=self.device["host"],
+                      requires_safe_eject=False, needs_manual_wake=True)
+        return result
+
+    def verify_connection(self):
+        self.session.guard()
+
+    def request_reload(self, manifest):
+        # Wi-Fi has no USB unplug event. Preserve the existing autoreboot
+        # ownership record and use the official complete framework stop/start.
+        try:
+            self.session.refresh()
+            return "wireless"
+        except Exception as error:
+            # The image transaction is already committed. Do not describe a
+            # refresh timeout as a failed image write or discard its journal.
+            self.reload_error = explain_error(error)
+            return "wireless-unconfirmed"
+
+    def restore_reload_settings(self, manifest):
+        mode = super().restore_reload_settings(manifest)
+        # Removing a USB-owned autoreboot flag returns 'manual' in the shared
+        # implementation. Wireless can perform that same complete reload now.
+        return self.request_reload(manifest) if mode == "manual" else mode
+
+    def reload_notice(self, mode):
+        if mode == "wireless":
+            return "无线传输和屏保重载已完成。等 Kindle 书籍列表恢复后，短按电源显示封面；程序不会自动让设备休眠。"
+        return ("图片文件已保存，但未确认屏保重载完成：" + self.reload_error
+                + "。请等待界面恢复后短按电源查看；若未更新，唤醒后重试无线发送，或在 KUAL → Screen Savers 点击 Restart framework now。")
+
+
+def run_action(board, action, payload):
+    with operation_lock(board.device["id"]):
+        if action == "status":
             print(json.dumps(board.inspect(), ensure_ascii=False))
         else:
-            print(board.install(payload) if args.action == "install" else board.restore())
+            print(board.install(payload) if action == "install" else board.restore())
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--action", choices=("install", "restore", "status",
+                        "wireless-install", "wireless-restore", "wireless-status"), required=True)
+    parser.add_argument("--image")
+    args = parser.parse_args()
+    action = args.action.removeprefix("wireless-")
+    if (action == "install") != bool(args.image):
+        parser.error("only install or wireless-install requires --image")
+    try:
+        payload = prepare_image(args.image) if action == "install" else None
+        if args.action.startswith("wireless-"):
+            with WirelessSession(PROJECT, RUNTIME, PW2_IDS) as session:
+                run_action(WirelessMessageBoard(session), action, payload)
+        else:
+            run_action(MessageBoard(discover()), action, payload)
         return 0
     except Exception as error:
-        print("PW2 留言板操作未完成：" + str(error) + "\n请保留设备上的 linkss/" + BACKUP_NAME + " 及其 preparing 准备目录、本机 runtime/paperwhite2，不要删除备份排错。", file=sys.stderr)
+        detail = explain_error(error) if args.action.startswith("wireless-") else str(error)
+        print("PW2 留言板操作未完成：" + detail + "\n请保留设备上的 linkss/" + BACKUP_NAME + " 及其 preparing 准备目录、本机 runtime/paperwhite2，不要删除备份排错。", file=sys.stderr)
         return 1
 
 

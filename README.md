@@ -4,7 +4,7 @@
 
 | 程序 | 用途 | 日常操作 |
 | --- | --- | --- |
-| **KindlePaperwhite2MessageBoard.exe — PW2 留言板** | Paperwhite 2 / 5.12.2.2，十行休眠封面 | USB 存储盘发送，安全弹出后重载屏保；需要预先安装 linkss |
+| **KindlePaperwhite2MessageBoard.exe — PW2 留言板** | Paperwhite 2 / 5.12.2.2，十行休眠封面 | 可用 USB；无线配对后，先唤醒 Kindle 再点“无线发送” |
 | **KindleMessageBoard.exe — DX 留言板** | DX Graphite / 2.5.8，十行休眠封面 | USB 网络发送；成功后可关闭程序并拔线 |
 | **KindleDisplay.exe — DX 显示器** | DX Graphite 的 Windows 独立扩展屏 | 连接后把窗口拖过去，支持四个方向 |
 
@@ -12,7 +12,7 @@
 
 ## 第一次使用
 
-**Paperwhite 2 用户：先看 [PW2 休眠封面留言板指南](docs/PAPERWHITE2_MESSAGEBOARD.zh-CN.md)。** 该版本通过存储盘复制图片，无需 USBNetwork、SSH 或网卡配置；设备首次需要完成适用的越狱及屏保插件安装。
+**Paperwhite 2 用户：先看 [PW2 休眠封面留言板指南](docs/PAPERWHITE2_MESSAGEBOARD.zh-CN.md)。** 设备首次需要完成适用的越狱及屏保插件安装。只用 USB 发送时无需 USBNetwork；无线发送另需按指南完成一次设备配对。
 
 **DX Graphite 用户：按 [DX 新手上手指南](docs/BEGINNER_GUIDE.zh-CN.md) 操作。**
 
@@ -27,14 +27,16 @@
 
 ### Paperwhite 2 留言板
 
-1. 设备已安装并启用 linkss，使用普通图片模式，连接后显示为 Kindle 存储盘。
-2. 打开 **KindlePaperwhite2MessageBoard.exe**，编辑最多十行文字，预览并发送。
-3. 等待文件写入完成，安全弹出并拔线。首次启用自动重载需要按提示在 Kindle 上重启一次。
-4. 以后拔线约十秒后会重新载入界面，再短按电源显示封面；也可用 KUAL 的 Screen Savers → Restart framework now 手动重载。
+设备先安装并启用 linkss，使用普通图片模式。打开 **KindlePaperwhite2MessageBoard.exe**，编辑最多十行文字并预览，再选发送方式：
+
+- **无线发送**：先手动唤醒 Kindle，确认电脑与 Kindle 连接同一 Wi-Fi，并拔掉 USB。确认窗口里的 IP 地址后点“无线发送”，等待书库回来，再短按电源显示封面。地址会保存，下次打开继续使用。
+- **USB发送**：接线并确认 Kindle 存储盘出现，点“USB发送”。完成后安全弹出、拔线，等待约十秒重载，再短按电源显示封面。首次启用自动重载需按提示完整重启一次。
+
+无线功能只在用户发起操作时连接，不提供远程唤醒、后台常在线或外网发送。首次无线配置和连接记录丢失后的重新配对，见 [PW2 指南](docs/PAPERWHITE2_MESSAGEBOARD.zh-CN.md)。
 
 生成竖向 **758×1024 灰度 PNG**。草稿单独保存在 `runtime/paperwhite2/messageboard-draft.txt`；第一次接管前的图片备份保存在 Kindle 的 `linkss/pw2-messageboard-backup`，本机对应的归属记录位于 `runtime/paperwhite2/devices`，两边都要保留。
 
-“恢复之前的封面”恢复接管前的图片，不会卸载 linkss。发送中断后按提示恢复；检测到用户新增图片或不匹配的备份时会停止覆盖。文件写入完成后，仍需在 Kindle 上完成重载和休眠才能确认效果。**本版本未做 PW2 实机验证。**
+“USB恢复封面”或“无线恢复封面”恢复接管前的图片，不会卸载 linkss。发送中断后按提示恢复；检测到用户新增图片或不匹配的备份时会停止覆盖。完成后等 Kindle 界面重载，再手动休眠查看结果。**本次无线代码更新未进行实际发送与恢复测试。**
 
 ### DX 留言板
 
@@ -70,7 +72,7 @@
 
 | 本机文件 | 内容 |
 | --- | --- |
-| `runtime/paperwhite2/` | PW2 独立草稿、设备归属记录和日志，需要完整保留 |
+| `runtime/paperwhite2/` | PW2 独立草稿、封面备份记录、无线配对和日志，需要完整保留 |
 | `runtime/messageboard-draft.txt` | 上次编辑的留言 |
 | `runtime/messageboard-state.json` | 本程序管理 Kindle 留言图片的归属记录，需一并保留 |
 | `runtime/kindle_known_hosts` | 自己的 Kindle 主机公钥 |
@@ -84,13 +86,13 @@
 - DX 程序适用 Kindle DX Graphite / B009 / 2.5.8；实测电脑为 Windows 11 x64。升级到 3.x 的 DXG 不在本指南范围内。
 - PW2 程序面向 Paperwhite 2 / 5.12.2.2，使用官方 linkss 0.25.N 插件的图片目录和重载标志；未实机验证。广告封面、其他机型和固件需另行处理，不能直接套用。
 - 桌面程序为 C# / WinForms；后台使用 Python 3.13、Paramiko、Pillow。
-- DX 的 USB 为电脑 `192.168.2.1` 到 Kindle `192.168.2.2` 的直连网络，沿用 USBNetwork 默认 USB 登录方式；PW2 使用 USB 存储盘。
-- DX 更新留言会短暂重新载入 Kindle 阅读界面再进入休眠；PW2 在弹出后重载，用户再手动休眠。
+- DX 的 USB 为电脑 `192.168.2.1` 到 Kindle `192.168.2.2` 的直连网络，沿用 USBNetwork 默认 USB 登录方式；PW2 可选择 USB 存储盘或同一 Wi-Fi 下发送。
+- DX 更新留言会短暂重新载入 Kindle 阅读界面再进入休眠；PW2 重载完成后，用户再手动休眠。
 - 扩展屏竖向 824×1200、横向 1200×824；Windows 的 60 Hz 不代表 Kindle 能以 60 帧刷新。
 
 ## 源码与构建
 
-`app/KindleDisplay.cs` 包含三个程序入口。`scripts/kindle-pw2-messageboard.py` 负责 PW2 存储盘发送；`scripts/kindle-messageboard.py` 负责 DX 留言板，其他显示控制脚本负责 DX 扩展屏。
+`app/KindleDisplay.cs` 包含三个程序入口。`scripts/kindle-pw2-messageboard.py` 是 PW2 发送入口，`scripts/pw2-wireless-setup.py` 用于首次无线配对；`scripts/kindle-messageboard.py` 负责 DX 留言板，其他显示控制脚本负责 DX 扩展屏。
 
 开发者在 PowerShell 7 的项目目录执行下列命令，可生成三个 Windows GUI EXE：
 

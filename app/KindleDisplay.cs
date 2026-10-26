@@ -936,6 +936,8 @@ namespace KindleDisplay
         private readonly PictureBox preview = new PictureBox();
         private readonly Label notice = new Label();
         private readonly Button render = new Button(), send = new Button(), restore = new Button(), close = new Button();
+        private readonly Button wirelessSend = new Button(), wirelessRestore = new Button(), saveWirelessAddress = new Button();
+        private readonly TextBox wirelessAddress = new TextBox();
         private readonly System.Windows.Forms.Timer draftTimer = new System.Windows.Forms.Timer();
         private bool busy, loading, draftLoadFailed;
 
@@ -966,7 +968,7 @@ namespace KindleDisplay
             Controls.Add(new Label { Text = "把提醒留在墨水屏上", Location = new Point(24, 18), Size = new Size(540, 32),
                 Font = new Font("Microsoft YaHei UI", 15F, FontStyle.Bold) });
             Controls.Add(new Label { Text = profile.UsbStorage
-                ? "仅限 Paperwhite 2；首次需按指南配置设备。最多十行，编辑自动保存。\r\n连接 Kindle 存储盘发送；发送后请安全弹出，按下方提示重载封面。"
+                ? "最多十行，编辑自动保存。USB 或无线均可发送到 Paperwhite 2。\r\n无线发送前请先唤醒 Kindle，让电脑与 Kindle 连接同一 Wi-Fi。"
                 : "最多十行，支持整段粘贴并自动保存；扩展屏运行时需先手动断开。\r\n休眠后可拔线；Kindle 重启后需重新发送。",
                 Location = new Point(26, 58), Size = new Size(555, 48), ForeColor = Color.DimGray,
                 Font = new Font("Microsoft YaHei UI", 9F) });
@@ -1011,11 +1013,39 @@ namespace KindleDisplay
             Controls.Add(new Label { Text = "竖向封面 · " + profile.Width + " × " + profile.Height,
                 Location = new Point(594, preview.Bottom + 10), Size = new Size(310, 24),
                 ForeColor = Color.DimGray, TextAlign = ContentAlignment.MiddleCenter });
-            Button[] buttons = { render, send, restore, close };
-            string[] captions = { "预览", "发送到 Kindle", profile.UsbStorage ? "恢复之前的封面" : "恢复原休眠封面", "关闭" };
-            int[] widths = { 98, 152, 170, 92 };
+            Button[] buttons = profile.UsbStorage
+                ? new Button[] { render, send, wirelessSend, restore, wirelessRestore, close }
+                : new Button[] { render, send, restore, close };
+            string[] captions = profile.UsbStorage
+                ? new string[] { "预览", "USB发送", "无线发送", "USB恢复封面", "无线恢复封面", "关闭" }
+                : new string[] { "预览", "发送到 Kindle", "恢复原休眠封面", "关闭" };
+            int[] widths = profile.UsbStorage ? new int[] { 86, 118, 118, 146, 146, 86 } : new int[] { 98, 152, 170, 92 };
             int x = 26;
             int buttonsTop = Math.Max(505, lineCount.Bottom + 12);
+            if (profile.UsbStorage)
+            {
+                int addressTop = Math.Max(buttonsTop, preview.Bottom + 42);
+                Controls.Add(new Label { Text = "Kindle IP 地址", Location = new Point(26, addressTop + 6), Size = new Size(108, 24) });
+                wirelessAddress.Location = new Point(140, addressTop + 3);
+                wirelessAddress.Size = new Size(182, 28);
+                wirelessAddress.MaxLength = 15;
+                wirelessAddress.AccessibleName = "Kindle 在当前 Wi-Fi 下的 IP 地址";
+                Controls.Add(wirelessAddress);
+                saveWirelessAddress.Text = "保存地址";
+                saveWirelessAddress.Location = new Point(334, addressTop);
+                saveWirelessAddress.Size = new Size(98, 32);
+                saveWirelessAddress.UseVisualStyleBackColor = true;
+                saveWirelessAddress.Click += delegate
+                {
+                    try { SaveWirelessAddress(); SetNotice("地址已保存。先唤醒 Kindle 并拔掉 USB，再点击“无线发送”。", false); }
+                    catch (Exception error) { SetNotice(error.Message, true); }
+                };
+                Controls.Add(saveWirelessAddress);
+                Controls.Add(new Label { Text = "无线使用时请拔掉 USB；电脑与 Kindle 连接同一 Wi-Fi。",
+                    Location = new Point(450, addressTop + 4), Size = new Size(454, 36), ForeColor = Color.DimGray,
+                    Font = new Font("Microsoft YaHei UI", 9F) });
+                buttonsTop = addressTop + 44;
+            }
             for (int index = 0; index < buttons.Length; index++)
             {
                 buttons[index].Text = captions[index];
@@ -1030,12 +1060,14 @@ namespace KindleDisplay
             ClientSize = new Size(930, Math.Max(665, notice.Bottom + 23));
             notice.ForeColor = Color.DimGray;
             notice.Text = profile.UsbStorage
-                ? "先编辑并预览，再连接 Kindle 存储盘发送。Paperwhite 2 草稿单独保存在本机。"
+                ? "先编辑并预览，再选择 USB 或无线发送。首次无线使用需先完成设备配置。"
                 : "先编辑并预览，再连接 USB 数据线发送。草稿只保存在本机。";
             Controls.Add(notice);
             render.Click += delegate { TryPreview(); };
             send.Click += async delegate { await SendAsync(false); };
             restore.Click += async delegate { await SendAsync(true); };
+            wirelessSend.Click += async delegate { await SendAsync(false, true); };
+            wirelessRestore.Click += async delegate { await SendAsync(true, true); };
             close.Click += delegate { Close(); };
             draftTimer.Interval = 600;
             draftTimer.Tick += delegate
@@ -1059,6 +1091,77 @@ namespace KindleDisplay
             LoadDraft();
             UpdateLineCount();
             if (!draftLoadFailed) TryPreview();
+            if (profile.UsbStorage) LoadWirelessAddress();
+        }
+
+        private Dictionary<string, object> ReadWirelessSettings()
+        {
+            string path = Path.Combine(runtime, "wireless.json");
+            if (!File.Exists(path)) return new Dictionary<string, object>();
+            try
+            {
+                if (new FileInfo(path).Length > 65536) throw new InvalidDataException();
+                Dictionary<string, object> settings = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(
+                    File.ReadAllText(path, Encoding.UTF8));
+                if (settings == null) throw new InvalidDataException();
+                return settings;
+            }
+            catch (Exception)
+            {
+                throw new InvalidDataException("无法读取已保存的无线设置，原文件已保留。请按指南检查首次无线配置。");
+            }
+        }
+
+        private void LoadWirelessAddress()
+        {
+            try
+            {
+                object value;
+                Dictionary<string, object> settings = ReadWirelessSettings();
+                if (settings.TryGetValue("host", out value) && value != null)
+                {
+                    string address = value as string;
+                    if (address == null) throw new InvalidDataException("已保存的 Kindle IP 地址格式不正确，请重新填写。");
+                    wirelessAddress.Text = address;
+                }
+            }
+            catch (Exception error) { SetNotice(error.Message, true); }
+        }
+
+        private static string ValidateWirelessAddress(string text)
+        {
+            string[] parts = (text ?? "").Trim().Split('.');
+            byte[] values = new byte[4];
+            if (parts.Length != 4) throw new ArgumentException("请填写 Kindle 当前的 IP 地址，例如 192.168.1.25。");
+            for (int index = 0; index < parts.Length; index++)
+                if (!Byte.TryParse(parts[index], NumberStyles.None, CultureInfo.InvariantCulture, out values[index]))
+                    throw new ArgumentException("IP 地址需要四组 0 到 255 的数字，例如 192.168.1.25。");
+            bool local = values[0] == 10 || (values[0] == 172 && values[1] >= 16 && values[1] <= 31) ||
+                (values[0] == 192 && values[1] == 168);
+            if (!local) throw new ArgumentException("请填写同一 Wi-Fi 下的 Kindle 内网地址；本程序不通过外网发送。");
+            return values[0].ToString(CultureInfo.InvariantCulture) + "." + values[1].ToString(CultureInfo.InvariantCulture) + "." +
+                values[2].ToString(CultureInfo.InvariantCulture) + "." + values[3].ToString(CultureInfo.InvariantCulture);
+        }
+
+        private void SaveWirelessAddress()
+        {
+            if (!profile.UsbStorage) return;
+            string address = ValidateWirelessAddress(wirelessAddress.Text);
+            Dictionary<string, object> settings = ReadWirelessSettings();
+            // Change only the displayed address. Pairing and connection details
+            // installed for this device remain intact, including unknown fields.
+            settings["host"] = address;
+            if (!settings.ContainsKey("port")) settings["port"] = 22;
+            Directory.CreateDirectory(runtime);
+            string path = Path.Combine(runtime, "wireless.json");
+            string temporary = Path.Combine(runtime, ".wireless." + Guid.NewGuid().ToString("N") + ".tmp");
+            try
+            {
+                File.WriteAllText(temporary, new JavaScriptSerializer().Serialize(settings), new UTF8Encoding(false));
+                if (!MoveFileEx(temporary, path, 0x1 | 0x8)) throw new Win32Exception(Marshal.GetLastWin32Error());
+                wirelessAddress.Text = address;
+            }
+            finally { if (File.Exists(temporary)) File.Delete(temporary); }
         }
 
         private static string[] SplitText(string text)
@@ -1079,7 +1182,7 @@ namespace KindleDisplay
             lineCount.Text = count.ToString(CultureInfo.InvariantCulture) + " / 10 行 · " +
                 (tooMany ? "已保留全部文字，请缩减到十行后再预览或发送。" : "自动保存到本机，下次打开继续编辑。Ctrl+A 可全选。");
             lineCount.ForeColor = tooMany ? Color.Firebrick : Color.DimGray;
-            render.Enabled = send.Enabled = !busy && !tooMany;
+            render.Enabled = send.Enabled = wirelessSend.Enabled = !busy && !tooMany;
         }
 
         private string[] ReadLines()
@@ -1159,13 +1262,18 @@ namespace KindleDisplay
             {
                 SaveDraft(); CreatePreview(false);
                 SetNotice(profile.UsbStorage
-                    ? "预览已更新。请连接 Kindle，确认电脑能看到 Kindle 存储盘，再点击“发送到 Kindle”。"
+                    ? "预览已更新。可接线后点“USB发送”，或先唤醒 Kindle、拔掉 USB，再点“无线发送”。"
                     : "预览已更新。确认文字后，连接 USB 并点击“发送到 Kindle”。", false);
             }
             catch (Exception error) { SetNotice(error.Message, true); }
         }
 
-        private async Task SendAsync(bool restoring)
+        private Task SendAsync(bool restoring)
+        {
+            return SendAsync(restoring, false);
+        }
+
+        private async Task SendAsync(bool restoring, bool wireless)
         {
             if (busy) return;
             string imagePath = null;
@@ -1173,21 +1281,33 @@ namespace KindleDisplay
             {
                 SaveDraft();
                 if (!restoring) imagePath = CreatePreview(true);
+                if (wireless)
+                {
+                    if (!profile.UsbStorage) throw new InvalidOperationException("此入口不支持无线发送。");
+                    SaveWirelessAddress();
+                }
                 string script = Path.Combine(root, "scripts", profile.BackendScript);
                 if (!File.Exists(python)) throw new FileNotFoundException("未找到 Python，请检查本机配置。", python);
                 if (!File.Exists(script)) throw new FileNotFoundException("未找到留言板后台程序，请保留完整程序目录。", script);
                 SetBusy(true);
-                SetNotice(restoring
-                    ? (profile.UsbStorage ? "正在恢复之前的封面，请保持 USB 连接…" : "正在恢复原休眠封面，请保持 USB 连接…")
-                    : "正在发送留言，请保持 USB 连接…", false);
-                MessageBoardResult result = await Task.Run(() => RunBackend(restoring, imagePath));
+                SetNotice(wireless
+                    ? (restoring ? "正在无线恢复之前的封面，请让 Kindle 保持唤醒…" : "正在无线发送，请让 Kindle 保持唤醒…")
+                    : (restoring
+                        ? (profile.UsbStorage ? "正在恢复之前的封面，请保持 USB 连接…" : "正在恢复原休眠封面，请保持 USB 连接…")
+                        : "正在发送留言，请保持 USB 连接…"), false);
+                MessageBoardResult result = await Task.Run(() => RunBackend(restoring, imagePath, wireless));
                 if (result.ExitCode != 0)
                 {
                     string error = String.IsNullOrWhiteSpace(result.Error) ? result.Output : result.Error;
-                    throw new InvalidOperationException(String.IsNullOrWhiteSpace(error) ? "留言板操作未完成，请检查 USB 连接后重试。" : error.Trim());
+                    throw new InvalidOperationException(String.IsNullOrWhiteSpace(error)
+                        ? (wireless ? "无线操作未完成。请先唤醒 Kindle，确认同一 Wi-Fi 并拔掉 USB，再重试。"
+                            : "留言板操作未完成，请检查 USB 连接后重试。") : error.Trim());
                 }
                 string output = result.Output == null ? "" : result.Output.Trim();
-                string fallback = profile.UsbStorage
+                string fallback = wireless
+                    ? (restoring ? "之前的封面已通过无线恢复。等 Kindle 回到书库，再短按电源显示封面。"
+                        : "留言已通过无线发送。等 Kindle 回到书库，再短按电源显示新封面。")
+                    : profile.UsbStorage
                     ? (restoring ? "之前的封面已写回。请安全弹出 Kindle，并按指南重载封面。"
                         : "留言已写入 Kindle。请安全弹出 Kindle，并按指南重载封面。")
                     : (restoring ? "原休眠封面已恢复。"
@@ -1198,12 +1318,12 @@ namespace KindleDisplay
             finally { SetBusy(false); }
         }
 
-        private MessageBoardResult RunBackend(bool restoring, string imagePath)
+        private MessageBoardResult RunBackend(bool restoring, string imagePath, bool wireless)
         {
             using (DeviceOperationGuard guard = new DeviceOperationGuard())
             {
                 if (!profile.UsbStorage) AssertDisplayStopped();
-                return RunBackendCore(restoring, imagePath);
+                return RunBackendCore(restoring, imagePath, wireless);
             }
         }
 
@@ -1235,10 +1355,11 @@ namespace KindleDisplay
             catch (ArgumentException) { } // The saved process has exited.
         }
 
-        private MessageBoardResult RunBackendCore(bool restoring, string imagePath)
+        private MessageBoardResult RunBackendCore(bool restoring, string imagePath, bool wireless)
         {
             string script = Path.Combine(root, "scripts", profile.BackendScript);
-            string arguments = "\"" + script + "\" --action " + (restoring ? "restore" : "install --image \"" + imagePath + "\"");
+            string action = (wireless ? "wireless-" : "") + (restoring ? "restore" : "install");
+            string arguments = "\"" + script + "\" --action " + action + (restoring ? "" : " --image \"" + imagePath + "\"");
             ProcessStartInfo info = new ProcessStartInfo(python, arguments);
             info.WorkingDirectory = root;
             info.UseShellExecute = false;
@@ -1267,7 +1388,8 @@ namespace KindleDisplay
         private void SetBusy(bool value)
         {
             busy = value;
-            render.Enabled = send.Enabled = restore.Enabled = close.Enabled = !value;
+            render.Enabled = send.Enabled = restore.Enabled = close.Enabled = wirelessSend.Enabled = wirelessRestore.Enabled = saveWirelessAddress.Enabled = !value;
+            wirelessAddress.Enabled = !value;
             editor.ReadOnly = value;
             UpdateLineCount();
             UseWaitCursor = value;
