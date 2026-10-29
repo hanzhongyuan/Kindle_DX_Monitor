@@ -1,17 +1,20 @@
 // Offline checks: compile with app/KindleDisplay.cs and select this Main.
-// Every form receives an isolated project root; no backend action is invoked.
+// Every form receives an isolated project root. Any backend subprocess is this
+// test executable recording argv; no real Python backend or device is invoked.
 using System;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
 using System.Reflection;
 using System.Text;
+using System.Web.Script.Serialization;
 using System.Windows.Forms;
 using KindleDisplay;
 
 internal static class MessageBoardLayoutChecks
 {
     private const BindingFlags PrivateInstance = BindingFlags.Instance | BindingFlags.NonPublic;
+    private const BindingFlags PrivateStatic = BindingFlags.Static | BindingFlags.NonPublic;
     private static int assertions;
     private static string output;
 
@@ -20,6 +23,15 @@ internal static class MessageBoardLayoutChecks
     {
         try
         {
+            if (args.Length == 5 && Path.GetFileName(args[0]) == "pw2-todo-send.py" &&
+                args[1] == "--project" && args[3] == "--text-file")
+            {
+                Console.OutputEncoding = new UTF8Encoding(false);
+                File.WriteAllText(Path.Combine(args[2], "captured-argv.json"), new JavaScriptSerializer().Serialize(args), new UTF8Encoding(false));
+                File.WriteAllText(Path.Combine(args[2], "captured-text.txt"), File.ReadAllText(args[4], new UTF8Encoding(false, true)), new UTF8Encoding(false));
+                Console.WriteLine(File.ReadAllText(Path.Combine(args[2], "fake-response.json"), Encoding.UTF8));
+                return 0;
+            }
             if (args.Length != 1) throw new ArgumentException("Supply an isolated output directory.");
             output = Path.GetFullPath(args[0]);
             Directory.CreateDirectory(output);
@@ -33,6 +45,7 @@ internal static class MessageBoardLayoutChecks
                 CheckSavedFontAlias(profile);
             }
             CheckIndependentSettings();
+            CheckTodoPush();
             Console.WriteLine("PASS: " + assertions + " assertions; no device connections or user drafts accessed.");
             Console.WriteLine("Artifacts: " + output);
             return 0;
@@ -72,6 +85,14 @@ internal static class MessageBoardLayoutChecks
         MethodInfo method = typeof(MessageBoardForm).GetMethod(name, PrivateInstance);
         if (method == null) throw new Exception("Missing form method: " + name);
         try { return method.Invoke(form, arguments); }
+        catch (TargetInvocationException error) { throw error.InnerException; }
+    }
+
+    private static object CallStatic(string name, params object[] arguments)
+    {
+        MethodInfo method = typeof(MessageBoardForm).GetMethod(name, PrivateStatic);
+        if (method == null) throw new Exception("Missing static form method: " + name);
+        try { return method.Invoke(null, arguments); }
         catch (TargetInvocationException error) { throw error.InnerException; }
     }
 
@@ -210,9 +231,9 @@ internal static class MessageBoardLayoutChecks
         Console.WriteLine("PASS renderer: " + Name(profile));
     }
 
-    private static MessageBoardForm Open(string projectRoot, MessageBoardProfile profile)
+    private static MessageBoardForm Open(string projectRoot, MessageBoardProfile profile, string python = null)
     {
-        MessageBoardForm form = new MessageBoardForm(projectRoot, Path.Combine(projectRoot, "never-executed-python.exe"), profile);
+        MessageBoardForm form = new MessageBoardForm(projectRoot, python ?? Path.Combine(projectRoot, "never-executed-python.exe"), profile);
         form.StartPosition = FormStartPosition.Manual;
         form.Location = new Point(-20000, -20000);
         form.ShowInTaskbar = false;
@@ -383,5 +404,95 @@ internal static class MessageBoardLayoutChecks
             form.Close();
         }
         Console.WriteLine("PASS font alias: " + Name(profile));
+    }
+
+    private static void CheckTodoPush()
+    {
+        Check((int)CallStatic("ValidateTodoText", "\uFEFF \t第一项\f\r\n\t\r第二项\n") == 2,
+            "todo validation matches BOM, ASCII trim, newline and empty-row rules");
+        Check((int)CallStatic("ValidateTodoText", "\u3000\n\u0085") == 2,
+            "non-ASCII whitespace is preserved consistently with backend");
+        Check((int)CallStatic("ValidateTodoText", String.Join("\n", Lines(200, "待办"))) == 200, "200 todo items are accepted");
+        string emoji = String.Concat(Lines(300, "\uD83D\uDE00"));
+        Check((int)CallStatic("ValidateTodoText", emoji) == 1, "300 Unicode scalar values accepted, including surrogate pairs");
+        Reject(delegate { CallStatic("ValidateTodoText", emoji + "字"); }, "300");
+        Reject(delegate { CallStatic("ValidateTodoText", String.Join("\n", Lines(201, "事项"))); }, "200");
+        Reject(delegate { CallStatic("ValidateTodoText", " \t\r\n\f"); }, "至少");
+        Reject(delegate { CallStatic("ValidateTodoText", "事项\t内容"); }, "控制字符");
+        Reject(delegate { CallStatic("ValidateTodoText", "事项\u0000内容"); }, "控制字符");
+        Reject(delegate { CallStatic("ValidateTodoText", "\uD83D"); }, "无效字符");
+        Reject(delegate { CallStatic("ValidateTodoText", new string(' ', 256 * 1024 + 1)); }, "256 KB");
+        string delivered = "已送达 Kindle，打开离线待办后自动接收。";
+        string response = new JavaScriptSerializer().Serialize(new { success = true, message = delivered });
+        Check((string)CallStatic("TodoResultMessage", new MessageBoardResult { ExitCode = 0, Output = response, Error = "" }) == delivered,
+            "backend message distinguishes delivery from device receipt");
+        try { CallStatic("TodoResultMessage", new MessageBoardResult { ExitCode = 0, Output = "not json", Error = "" }); throw new Exception("Expected invalid JSON rejection"); }
+        catch (InvalidDataException) { assertions++; }
+        try { CallStatic("TodoResultMessage", new MessageBoardResult { ExitCode = 0, Output = "{\"success\":true}", Error = "" }); throw new Exception("Expected incomplete JSON rejection"); }
+        catch (InvalidDataException) { assertions++; }
+        try { CallStatic("TodoResultMessage", new MessageBoardResult { ExitCode = 1, Output = "", Error = "设备未唤醒" }); throw new Exception("Expected backend error"); }
+        catch (InvalidOperationException error) { Check(error.Message == "设备未唤醒", "nonzero backend failure retains actionable message"); }
+
+        string project = Path.Combine(output, "pw2 todo fake backend with spaces") + Path.DirectorySeparatorChar;
+        Directory.CreateDirectory(Path.Combine(project, "scripts"));
+        File.WriteAllText(Path.Combine(project, "scripts", "pw2-todo-send.py"), "test recorder only", new UTF8Encoding(false));
+        File.WriteAllText(Path.Combine(project, "fake-response.json"), response, new UTF8Encoding(false));
+        using (MessageBoardForm form = Open(project, MessageBoardProfile.Paperwhite2, Assembly.GetExecutingAssembly().Location))
+        {
+            TextBox editor = Field<TextBox>(form, "editor");
+            Button push = Field<Button>(form, "todoSend");
+            Check(form.Controls.Contains(push) && !push.Enabled, "PW2 shows a separate todo button, disabled for empty text");
+            string firstOutbox = (string)Call(form, "SaveTodoOutbox", "第一份待办");
+            string secondOutbox = (string)Call(form, "SaveTodoOutbox", "另一份待办");
+            Check(firstOutbox != secondOutbox, "concurrent requests receive independent outbox paths");
+            Check(File.ReadAllText(firstOutbox, Encoding.UTF8) == "第一份待办" &&
+                File.ReadAllText(secondOutbox, Encoding.UTF8) == "另一份待办", "separate outboxes preserve both request snapshots");
+            string text = String.Join("\r\n", Lines(50, "事项含引号 \" 和字面量 $(nothing)"));
+            editor.Text = text;
+            Configure(form, 1, 120, "Microsoft YaHei", false, false);
+            Check(push.Enabled && !Field<Button>(form, "render").Enabled && !Field<Button>(form, "wirelessSend").Enabled,
+                "todo push bypasses cover row and font rendering limits");
+            Check(push.Right <= form.ClientSize.Width && push.Bottom <= form.ClientSize.Height, "todo button fits window");
+            Call(form, "SetBusy", true);
+            Check(!push.Enabled, "device operation blocks concurrent todo push");
+            Call(form, "SetBusy", false);
+            Check(push.Enabled, "idle restores todo push despite cover overflow");
+            Field<TextBox>(form, "wirelessAddress").Text = "192.168.1.25";
+            System.Threading.Tasks.Task pending = (System.Threading.Tasks.Task)Call(form, "SendTodoAsync");
+            DateTime deadline = DateTime.UtcNow.AddSeconds(15);
+            while (!pending.IsCompleted && DateTime.UtcNow < deadline)
+            {
+                Application.DoEvents();
+                System.Threading.Thread.Sleep(10);
+            }
+            Check(pending.IsCompleted, "local fake backend completed");
+            pending.GetAwaiter().GetResult();
+            Check(Field<Label>(form, "notice").Text == delivered, "push completes through actual process/JSON/UI flow");
+            string[] captured = new JavaScriptSerializer().Deserialize<string[]>(File.ReadAllText(Path.Combine(project, "captured-argv.json"), Encoding.UTF8));
+            Check(captured[2] == project, "Windows argv preserves spaces and trailing project backslash");
+            string outbox = captured[4];
+            Check(Path.GetDirectoryName(outbox) == Path.Combine(project, "runtime", "paperwhite2") &&
+                Path.GetFileName(outbox).StartsWith("todo-outbox-"), "text-file argument identifies isolated outbox");
+            Check(File.ReadAllText(Path.Combine(project, "captured-text.txt"), new UTF8Encoding(false, true)) == text,
+                "backend receives exact original UTF-8 draft");
+            Check(!File.Exists(outbox), "completed request removes only its own temporary text");
+            Check(File.Exists(firstOutbox) && File.Exists(secondOutbox), "cleanup leaves other request snapshots intact");
+            Check(File.ReadAllText(Path.Combine(project, "runtime", "paperwhite2", "todo-send.stdout.log"), Encoding.UTF8).Contains(delivered),
+                "todo response logged independently");
+            Check(push.Enabled && !editor.ReadOnly, "successful push restores editable controls");
+            editor.Text = String.Join("\n", Lines(201, "事项"));
+            Check(!push.Enabled, "201 entries disable todo push without discarding text");
+            editor.Text = "读书三十分钟\r\n整理桌面";
+            Configure(form, 10, 36, "Microsoft YaHei", true, false);
+            Call(form, "TryPreview");
+            Snapshot(form, Path.Combine(output, "pw2-window-todo-push.png"));
+            form.Close();
+        }
+        using (MessageBoardForm dx = Open(Path.Combine(output, "dx-no-todo-push"), MessageBoardProfile.Dx))
+        {
+            Check(!dx.Controls.Contains(Field<Button>(dx, "todoSend")), "DX has no PW2 todo push action");
+            dx.Close();
+        }
+        Console.WriteLine("PASS todo validation, UI gating and isolated backend process");
     }
 }

@@ -989,6 +989,7 @@ namespace KindleDisplay
         private readonly Label notice = new Label();
         private readonly Button render = new Button(), send = new Button(), restore = new Button(), close = new Button();
         private readonly Button wirelessSend = new Button(), wirelessRestore = new Button(), saveWirelessAddress = new Button();
+        private readonly Button todoSend = new Button();
         private readonly TextBox wirelessAddress = new TextBox();
         private readonly System.Windows.Forms.Timer draftTimer = new System.Windows.Forms.Timer();
         private bool busy, loading, draftLoadFailed, layoutLoadFailed;
@@ -1021,7 +1022,7 @@ namespace KindleDisplay
             Controls.Add(new Label { Text = "把提醒留在墨水屏上", Location = new Point(24, 18), Size = new Size(540, 32),
                 Font = new Font("Microsoft YaHei UI", 15F, FontStyle.Bold) });
             Controls.Add(new Label { Text = profile.UsbStorage
-                ? "行数、字体、字号和横竖方向可调，文字与设置自动保存。\r\n无线发送前请先唤醒 Kindle，让电脑与 Kindle 连接同一 Wi-Fi。"
+                ? "封面排版可调，也可把每行文字无线推送为待办。\r\n无线操作前请先唤醒 Kindle，让电脑与 Kindle 连接同一 Wi-Fi。"
                 : "行数、字体、字号和方向可调；发送前请先断开扩展屏。\r\n文字与设置自动保存。休眠后可拔线；Kindle 重启后需重新发送。",
                 Location = new Point(26, 58), Size = new Size(555, 48), ForeColor = Color.DimGray,
                 Font = new Font("Microsoft YaHei UI", 9F) });
@@ -1088,7 +1089,7 @@ namespace KindleDisplay
             editor.ShortcutsEnabled = true;
             editor.MaxLength = Int32.MaxValue;
             editor.Size = new Size(538, 249);
-            editor.AccessibleName = "留言内容，每行一条，行数可在上方设置";
+            editor.AccessibleName = profile.UsbStorage ? "留言或待办内容，每行一条" : "留言内容，每行一条，行数可在上方设置";
             editor.KeyDown += delegate(object sender, KeyEventArgs args)
             {
                 if (args.Control && args.KeyCode == Keys.A)
@@ -1124,12 +1125,12 @@ namespace KindleDisplay
             previewCaption.Font = new Font("Microsoft YaHei UI", 9F);
             Controls.Add(previewCaption);
             Button[] buttons = profile.UsbStorage
-                ? new Button[] { render, send, wirelessSend, restore, wirelessRestore, close }
+                ? new Button[] { render, send, wirelessSend, todoSend, restore, wirelessRestore, close }
                 : new Button[] { render, send, restore, close };
             string[] captions = profile.UsbStorage
-                ? new string[] { "预览", "USB发送", "无线发送", "USB恢复封面", "无线恢复封面", "关闭" }
+                ? new string[] { "预览", "USB发送", "无线发送", "推送待办", "USB恢复封面", "无线恢复封面", "关闭" }
                 : new string[] { "预览", "发送到 Kindle", "恢复原休眠封面", "关闭" };
-            int[] widths = profile.UsbStorage ? new int[] { 86, 118, 118, 146, 146, 86 } : new int[] { 98, 152, 170, 92 };
+            int[] widths = profile.UsbStorage ? new int[] { 86, 118, 118, 118, 146, 146, 86 } : new int[] { 98, 152, 170, 92 };
             int x = 26;
             int buttonsTop = Math.Max(505, lineCount.Bottom + 12);
             if (profile.UsbStorage)
@@ -1147,7 +1148,7 @@ namespace KindleDisplay
                 saveWirelessAddress.UseVisualStyleBackColor = true;
                 saveWirelessAddress.Click += delegate
                 {
-                    try { SaveWirelessAddress(); SetNotice("地址已保存。先唤醒 Kindle 并拔掉 USB，再点击“无线发送”。", false); }
+                    try { SaveWirelessAddress(); SetNotice("地址已保存。先唤醒 Kindle 并拔掉 USB，再选择“无线发送”封面或“推送待办”。", false); }
                     catch (Exception error) { SetNotice(error.Message, true); }
                 };
                 Controls.Add(saveWirelessAddress);
@@ -1170,7 +1171,7 @@ namespace KindleDisplay
             ClientSize = new Size(930, Math.Max(665, notice.Bottom + 23));
             notice.ForeColor = Color.DimGray;
             notice.Text = profile.UsbStorage
-                ? "先编辑并预览，再选择 USB 或无线发送。首次无线使用需先完成设备配置。"
+                ? "“无线发送”更新屏保封面；“推送待办”将每行追加到 KOReader 清单，保留原有完成状态。相同草稿重发不重复；改了草稿再推送会追加整份草稿。首次无线使用需先完成设备配置。"
                 : "先编辑并预览，再连接 USB 数据线发送。草稿只保存在本机。";
             Controls.Add(notice);
             render.Click += delegate { TryPreview(); };
@@ -1178,6 +1179,8 @@ namespace KindleDisplay
             restore.Click += async delegate { await SendAsync(true); };
             wirelessSend.Click += async delegate { await SendAsync(false, true); };
             wirelessRestore.Click += async delegate { await SendAsync(true, true); };
+            todoSend.AccessibleName = "通过 Wi-Fi 将每行文字追加到 KOReader 离线待办";
+            todoSend.Click += async delegate { await SendTodoAsync(); };
             close.Click += delegate { Close(); };
             draftTimer.Interval = 600;
             draftTimer.Tick += delegate
@@ -1366,13 +1369,85 @@ namespace KindleDisplay
                 (tooMany ? "已保留全部文字，请增加显示行数或精简内容后再预览、发送。" : "文字与排版自动保存。调整后点“预览”查看；Ctrl+A 可全选。");
             lineCount.ForeColor = tooMany ? Color.Firebrick : Color.DimGray;
             render.Enabled = send.Enabled = wirelessSend.Enabled = !busy && !tooMany;
+            int todoCount = 0;
+            if (profile.UsbStorage)
+            {
+                foreach (string line in SplitTodoText(editor.Text)) if (line.Length != 0) todoCount++;
+                lineCount.Text = count + " / " + rows + " 封面行 · " +
+                    (tooMany ? "封面需增加行数或精简内容。" : "文字与排版自动保存。") +
+                    "\r\n待办 " + todoCount + " / 200 项（每项最多300字），不受封面排版限制。";
+                if (todoCount > 200) lineCount.ForeColor = Color.Firebrick;
+            }
+            todoSend.Enabled = profile.UsbStorage && !busy && todoCount > 0 && todoCount <= 200;
+        }
+
+        private static int ValidateTodoText(string text)
+        {
+            try
+            {
+                if (new UTF8Encoding(false, true).GetByteCount(text ?? "") > 256 * 1024)
+                    throw new ArgumentException("待办文本超过 256 KB，请分批推送。全部草稿已保留。");
+            }
+            catch (EncoderFallbackException) { throw new ArgumentException("待办中含有无效字符，请重新输入。"); }
+            int count = 0, lineNumber = 0;
+            foreach (string item in SplitTodoText(text))
+            {
+                lineNumber++;
+                if (item.Length == 0) continue;
+                if (++count > 200) throw new ArgumentException("每次最多推送 200 项待办，请减少内容后再推送。全部草稿已保留。");
+                int characters = 0;
+                for (int index = 0; index < item.Length; index++)
+                {
+                    char character = item[index];
+                    if (character < 32 || character == 127)
+                        throw new ArgumentException("第 " + lineNumber + " 行包含制表符或控制字符，请调整后再推送。");
+                    if (Char.IsHighSurrogate(character))
+                    {
+                        if (index + 1 >= item.Length || !Char.IsLowSurrogate(item[index + 1]))
+                            throw new ArgumentException("第 " + lineNumber + " 行含有无效字符，请重新输入。");
+                        index++;
+                    }
+                    else if (Char.IsLowSurrogate(character))
+                        throw new ArgumentException("第 " + lineNumber + " 行含有无效字符，请重新输入。");
+                    if (++characters > 300)
+                        throw new ArgumentException("第 " + lineNumber + " 行超过 300 个字符，请缩短后再推送。全部草稿已保留。");
+                }
+            }
+            if (count == 0) throw new ArgumentException("请至少填写一项待办后再推送。");
+            return count;
+        }
+
+        private static string[] SplitTodoText(string text)
+        {
+            text = text ?? "";
+            if (text.StartsWith("\uFEFF", StringComparison.Ordinal)) text = text.Substring(1);
+            string[] lines = SplitText(text);
+            for (int index = 0; index < lines.Length; index++) lines[index] = lines[index].Trim(' ', '\t', '\v', '\f');
+            return lines;
+        }
+
+        private string SaveTodoOutbox(string text)
+        {
+            Directory.CreateDirectory(runtime);
+            string token = Guid.NewGuid().ToString("N");
+            string path = Path.Combine(runtime, "todo-outbox-" + token + ".txt");
+            string temporary = Path.Combine(runtime, ".todo-outbox-" + token + ".tmp");
+            try
+            {
+                File.WriteAllText(temporary, text, new UTF8Encoding(false, true));
+                if (!MoveFileEx(temporary, path, 0x8)) throw new Win32Exception(Marshal.GetLastWin32Error());
+            }
+            finally { if (File.Exists(temporary)) File.Delete(temporary); }
+            return path;
         }
 
         private string[] ReadLines()
         {
             string[] content = SplitText(editor.Text);
             int rows = (int)rowChoice.Value;
-            if (content.Length > rows) throw new ArgumentException("文字超过设置的 " + rows + " 行。全部文字已保留，请增加显示行数或精简内容后再发送。");
+            if (content.Length > rows) throw new ArgumentException(profile.UsbStorage
+                ? "封面文字超过设置的 " + rows + " 行。草稿已保留，请调整封面行数，或直接点“推送待办”追加清单。"
+                : "文字超过设置的 " + rows + " 行。全部文字已保留，请增加显示行数或精简内容后再发送。");
             string[] result = new string[rows];
             for (int index = 0; index < result.Length; index++)
                 result[index] = index < content.Length ? content[index].Replace("\t", "    ") : "";
@@ -1449,7 +1524,7 @@ namespace KindleDisplay
             {
                 SaveLocalState(); CreatePreview(false);
                 SetNotice(profile.UsbStorage
-                    ? "预览已更新。可接线后点“USB发送”，或先唤醒 Kindle、拔掉 USB，再点“无线发送”。"
+                    ? "封面预览已更新。“USB发送”或“无线发送”更新屏保；“推送待办”按次追加整份草稿，保留原有完成状态。相同草稿重发不重复；改了草稿再推送会追加整份草稿。无线操作前先唤醒 Kindle，并拔掉 USB。"
                     : "预览已更新。确认文字后，连接 USB 并点击“发送到 Kindle”。", false);
             }
             catch (Exception error) { ClearPreview(); SetNotice(error.Message, true); }
@@ -1458,6 +1533,81 @@ namespace KindleDisplay
         private Task SendAsync(bool restoring)
         {
             return SendAsync(restoring, false);
+        }
+
+        private async Task SendTodoAsync()
+        {
+            if (busy || !profile.UsbStorage) return;
+            string textPath = null;
+            try
+            {
+                draftTimer.Stop();
+                SaveLocalState();
+                ValidateTodoText(editor.Text);
+                SaveWirelessAddress();
+                string script = Path.Combine(root, "scripts", "pw2-todo-send.py");
+                if (!File.Exists(python)) throw new FileNotFoundException("未找到 Python，请检查本机配置。", python);
+                if (!File.Exists(script)) throw new FileNotFoundException("未找到待办推送程序，请保留完整程序目录。", script);
+                textPath = SaveTodoOutbox(editor.Text);
+                SetBusy(true);
+                SetNotice("正在通过 Wi-Fi 推送待办，请让 Kindle 保持唤醒。原有事项和完成状态会保留。", false);
+                MessageBoardResult result = await Task.Run(() => RunTodoBackend(script, textPath));
+                SetNotice(TodoResultMessage(result), false);
+            }
+            catch (Exception error) { SetNotice(error.Message, true); }
+            finally
+            {
+                try
+                {
+                    if (textPath != null && File.Exists(textPath) &&
+                        (File.GetAttributes(textPath) & FileAttributes.ReparsePoint) == 0) File.Delete(textPath);
+                }
+                catch (Exception error) { SetNotice(notice.Text + "\r\n本机发送临时文本未能清理：" + error.Message, true); }
+                SetBusy(false);
+            }
+        }
+
+        private static string TodoResultMessage(MessageBoardResult result)
+        {
+            if (result.ExitCode != 0)
+            {
+                string error = String.IsNullOrWhiteSpace(result.Error) ? result.Output : result.Error;
+                throw new InvalidOperationException(String.IsNullOrWhiteSpace(error)
+                    ? "待办推送未完成。请先唤醒 Kindle，确认同一 Wi-Fi 并拔掉 USB，再重试。" : error.Trim());
+            }
+            Dictionary<string, object> response;
+            try { response = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(result.Output); }
+            catch (Exception) { throw new InvalidDataException("无法识别待办推送结果，请查看 runtime/paperwhite2/todo-send.stdout.log。"); }
+            object success, message;
+            if (response == null || !response.TryGetValue("success", out success) || !(success is bool) ||
+                !response.TryGetValue("message", out message) || !(message is string) || String.IsNullOrWhiteSpace((string)message))
+                throw new InvalidDataException("待办推送返回结果不完整，请查看 runtime/paperwhite2/todo-send.stdout.log。");
+            if (!(bool)success) throw new InvalidOperationException((string)message);
+            return ((string)message).Trim();
+        }
+
+        private static string QuoteProcessArgument(string value)
+        {
+            // ProcessStartInfo.Arguments follows Windows argv quoting, including
+            // doubling a trailing backslash before the closing quote.
+            StringBuilder quoted = new StringBuilder("\"");
+            int slashes = 0;
+            foreach (char character in value)
+            {
+                if (character == '\\') { slashes++; continue; }
+                quoted.Append('\\', character == '"' ? slashes * 2 + 1 : slashes);
+                quoted.Append(character);
+                slashes = 0;
+            }
+            quoted.Append('\\', slashes * 2);
+            return quoted.Append('"').ToString();
+        }
+
+        private MessageBoardResult RunTodoBackend(string script, string textPath)
+        {
+            using (DeviceOperationGuard guard = new DeviceOperationGuard())
+                return RunPythonBackend(QuoteProcessArgument(script) + " --project " + QuoteProcessArgument(root) +
+                    " --text-file " + QuoteProcessArgument(textPath), "todo-send");
         }
 
         private async Task SendAsync(bool restoring, bool wireless)
@@ -1548,6 +1698,11 @@ namespace KindleDisplay
             string script = Path.Combine(root, "scripts", profile.BackendScript);
             string action = (wireless ? "wireless-" : "") + (restoring ? "restore" : "install");
             string arguments = "\"" + script + "\" --action " + action + (restoring ? "" : " --image \"" + imagePath + "\"");
+            return RunPythonBackend(arguments, "messageboard");
+        }
+
+        private MessageBoardResult RunPythonBackend(string arguments, string logPrefix)
+        {
             ProcessStartInfo info = new ProcessStartInfo(python, arguments);
             info.WorkingDirectory = root;
             info.UseShellExecute = false;
@@ -1567,8 +1722,8 @@ namespace KindleDisplay
                 process.WaitForExit();
                 MessageBoardResult result = new MessageBoardResult { ExitCode = process.ExitCode,
                     Output = output.GetAwaiter().GetResult(), Error = error.GetAwaiter().GetResult() };
-                File.WriteAllText(Path.Combine(runtime, "messageboard.stdout.log"), result.Output, new UTF8Encoding(false));
-                File.WriteAllText(Path.Combine(runtime, "messageboard.stderr.log"), result.Error, new UTF8Encoding(false));
+                File.WriteAllText(Path.Combine(runtime, logPrefix + ".stdout.log"), result.Output, new UTF8Encoding(false));
+                File.WriteAllText(Path.Combine(runtime, logPrefix + ".stderr.log"), result.Error, new UTF8Encoding(false));
                 return result;
             }
         }
@@ -1576,7 +1731,7 @@ namespace KindleDisplay
         private void SetBusy(bool value)
         {
             busy = value;
-            render.Enabled = send.Enabled = restore.Enabled = close.Enabled = wirelessSend.Enabled = wirelessRestore.Enabled = saveWirelessAddress.Enabled = !value;
+            render.Enabled = send.Enabled = restore.Enabled = close.Enabled = wirelessSend.Enabled = wirelessRestore.Enabled = saveWirelessAddress.Enabled = todoSend.Enabled = !value;
             wirelessAddress.Enabled = !value;
             rowChoice.Enabled = fontChoice.Enabled = fontSizeChoice.Enabled = autoFit.Enabled = orientationChoice.Enabled = !value;
             editor.ReadOnly = value;
